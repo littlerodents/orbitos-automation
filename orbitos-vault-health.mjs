@@ -9,8 +9,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadConfig } from "./lib/config.mjs";
+const _cfg = loadConfig();
 
-const DEFAULT_VAULT = "/Users/evander/Obsidian/OrbitOS";
+const DEFAULT_VAULT = _cfg.vault_path;
 const MAX_TAGS_PER_NOTE = 8;
 const MAX_SELECTED_TOPICS = 3;
 

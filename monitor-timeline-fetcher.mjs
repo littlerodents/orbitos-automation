@@ -3,11 +3,13 @@
 // Runs via launchd every 30 min. No API key needed — uses Chrome's cookies via CDP proxy.
 
 import { execFileSync } from "node:child_process";
+import { loadConfig } from "./lib/config.mjs";
 
-const CDP_PROXY = "http://localhost:3456";
-const GH_TOKEN = "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";
-const REPO = "littlerodents/evander-orbitos-vault";
-const BRANCH = "main";
+const _cfg = loadConfig();
+const CDP_PROXY = _cfg.cdp_proxy_url;
+const GH_TOKEN = process.env.GITHUB_TOKEN || "";
+const REPO = _cfg.github_owner + "/" + _cfg.github_repo;
+const BRANCH = _cfg.github_branch || "main";
 const CACHE_PATH = "00_Inbox/.monitor-timeline-cache.json";
 const SIGNALS_PATH = "00_Inbox/.monitor-tab-signals.json";
 

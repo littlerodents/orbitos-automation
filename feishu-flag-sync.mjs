@@ -3,9 +3,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
+import { loadConfig } from "./lib/config.mjs";
 
-const VAULT = "/Users/evander/Obsidian/OrbitOS";
-const LARK_CLI = "/Users/evander/.npm-global/bin/lark-cli";
+const _cfg = loadConfig();
+const VAULT = _cfg.vault_path;
+const LARK_CLI = _cfg.lark_cli_path;
 const args = new Set(process.argv.slice(2));
 const DRY_RUN = args.has("--dry-run");
 const NO_GIT = args.has("--no-git") || DRY_RUN;
@@ -23,7 +26,7 @@ function runLarkCli(argv) {
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `/usr/local/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
+      PATH: `/usr/local/bin:/opt/homebrew/bin:${homedir()}/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
       LARK_CLI_NO_PROXY: "1",
     },
     maxBuffer: 20 * 1024 * 1024,

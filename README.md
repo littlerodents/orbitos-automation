@@ -102,27 +102,12 @@ All agent tests use:
 
 ## Credentials (stored in n8n cloud)
 
-| Credential | n8n ID | Used by |
-|-----------|--------|---------|
-| GitHub PAT | QEKX1U3jmTLOWz8F | All workflows |
-| DeepSeek Official | WAiJ6o2iZ72KnkgB | Daily Brief, Weekly Synth |
-| OrbitOS Bot (Telegram) | JcZ8k5MXCyGZtRmD | Telegram Capture |
+| Credential | Type | Used by |
+|-----------|------|---------|
+| GitHub PAT | httpHeaderAuth | All workflows |
+| DeepSeek Official | httpHeaderAuth | Daily Brief, Weekly Synth |
+| Telegram Bot | telegramApi | Telegram Capture |
 
-Agent workflows use inline tokens in Set Vars (GitHub PAT + DeepSeek API key + Exa API key) for Code node API calls that can't use n8n credentials.
+Agent workflows use inline tokens in Set Vars for Code node API calls that can't use n8n credentials. Friends should replace these with their own values after importing.
 
-## n8n API
-
-```bash
-N8N_KEY="<api-key>"
-BASE="https://hmzshhy.app.n8n.cloud/api/v1"
-
-# List workflows
-curl -s "$BASE/workflows" -H "X-N8N-API-KEY: $N8N_KEY"
-
-# Activate workflow
-curl -s -X POST "$BASE/workflows/{id}/activate" -H "X-N8N-API-KEY: $N8N_KEY"
-
-# Create workflow
-curl -s -X POST "$BASE/workflows" -H "X-N8N-API-KEY: $N8N_KEY" \
-  -H "Content-Type: application/json" -d @workflow.json
-```
+> ⚠️ **Friend notice**: The workflow JSON files in `99_System/Workflows/` contain the original author's tokens. Fork → replace all tokens in Set Vars with your own before deploying.
