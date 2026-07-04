@@ -1,0 +1,66 @@
+{
+  "calibrationUntil": "2026-05-31",
+  "baseName": "OrbitOS Intake DB",
+  "baseToken": "NmUmb0QGnaJ6ECsXJ4EcyoPOn2e",
+  "baseUrl": "https://my.feishu.cn/base/NmUmb0QGnaJ6ECsXJ4EcyoPOn2e",
+  "tableName": "Content Inbox",
+  "tableId": "tbloXQL7ZXkgVveC",
+  "views": [
+    {
+      "name": "01 待筛选",
+      "id": "vewGN7no8p"
+    },
+    {
+      "name": "02 喜欢内容",
+      "id": "vewGcNgpIm"
+    },
+    {
+      "name": "03 待进入 Obsidian",
+      "id": "vewxEU3exR"
+    },
+    {
+      "name": "04 已进入 OrbitOS",
+      "id": "vew2l2mRoj"
+    },
+    {
+      "name": "05 全量",
+      "id": "vewZg3zUKL"
+    },
+    {
+      "name": "00 每周只看",
+      "id": "vewgdpSEb3"
+    },
+    {
+      "name": "Readwise 纠偏",
+      "id": "vewacKlreO"
+    },
+    {
+      "name": "后台全量",
+      "id": "vewNj6XQK8"
+    }
+  ],
+  "createdAt": "2026-05-15T08:36:57.468Z",
+  "fieldNames": {
+    "title": "标题",
+    "source": "来源",
+    "sourceId": "来源 ID",
+    "sourceKey": "Source Key",
+    "type": "类型",
+    "status": "状态",
+    "liked": "我喜欢的内容",
+    "promote": "进入 Obsidian",
+    "obsidianPath": "Obsidian 路径",
+    "url": "URL",
+    "author": "作者",
+    "sourceTime": "来源时间",
+    "importedAt": "导入时间",
+    "tags": "标签",
+    "aiTags": "AI 标签",
+    "project": "项目",
+    "topic": "主题",
+    "summary": "摘要",
+    "raw": "原文",
+    "hash": "Hash",
+    "lastSync": "最后同步"
+  }
+}
