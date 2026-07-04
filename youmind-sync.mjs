@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const VAULT = "/Users/evander/Obsidian/OrbitOS";
+import { loadConfig } from "./lib/config.mjs";
+const _cfg = loadConfig();
+const VAULT = _cfg.vault_path;;
 const OUT_ROOT = path.join(VAULT, "30_Research", "YouMind");
 const API_BASE = "https://youmind.com/openapi/v1";
 const KEYCHAIN_SERVICE = "orbitos-youmind-api-key";

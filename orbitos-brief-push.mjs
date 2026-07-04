@@ -12,13 +12,15 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
+import { loadConfig } from "./lib/config.mjs";
 
-const LARK_CLI = "/Users/evander/.npm-global/bin/lark-cli";
-const OWNER_USER_ID = "ou_2d2b140887fb5be28b9dfe6ed130771b";
+const _cfg = loadConfig();
+const LARK_CLI = _cfg.lark_cli_path;
+const OWNER_USER_ID = _cfg.feishu_user_id;
 const STATE_DIR = join(homedir(), ".cache/orbitos-brief-push");
 const STATE_FILE = join(STATE_DIR, "pushed-commits.json");
 const FAILED_FILE = join(STATE_DIR, "failed-commits.json");
-const REPO = "littlerodents/evander-orbitos-vault";
+const REPO = _cfg.github_owner + "/" + _cfg.github_repo;
 
 const GH_MAX_ATTEMPTS = 3;
 const RETRY_WAIT_MS = 5000;
@@ -42,7 +44,7 @@ let sendRetryWaitMs = RETRY_WAIT_MS;
 let larkRunner = (argv) => {
   const r = spawnSync(LARK_CLI, argv, { encoding: "utf8", env: {
     ...process.env,
-    PATH: `/usr/local/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin"}`,
+    PATH: `/usr/local/bin:/opt/homebrew/bin:${join(homedir(), ".npm-global", "bin")}:${process.env.PATH || "/usr/bin:/bin"}`,
     LARK_CLI_NO_PROXY: "1",
   }});
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -57,7 +59,7 @@ export function resetRunners() {
   larkRunner = (argv) => {
     const r = spawnSync(LARK_CLI, argv, { encoding: "utf8", env: {
       ...process.env,
-      PATH: `/usr/local/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin"}`,
+      PATH: `/usr/local/bin:/opt/homebrew/bin:${join(homedir(), ".npm-global", "bin")}:${process.env.PATH || "/usr/bin:/bin"}`,
       LARK_CLI_NO_PROXY: "1",
     }});
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };

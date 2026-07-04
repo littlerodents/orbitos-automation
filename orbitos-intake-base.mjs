@@ -13,13 +13,16 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { loadConfig } from "./lib/config.mjs";
+const _cfg = loadConfig();
+
 import { fileURLToPath } from "node:url";
 
-const VAULT = "/Users/evander/Obsidian/OrbitOS";
-const ROOT = "/Users/evander/Labs/codex/orbitos-automation";
+const VAULT = _cfg.vault_path;
+const ROOT = process.cwd();
 const CONFIG_PATH = path.join(ROOT, "orbitos-intake-base.config.json");
 const STATE_PATH = path.join(ROOT, "orbitos-intake-base.state.json");
-const LARK_CLI = "/Users/evander/.npm-global/bin/lark-cli";
+const LARK_CLI = _cfg.lark_cli_path;
 const TIME_ZONE = "Asia/Shanghai";
 const DEFAULT_CALIBRATION_UNTIL = "2026-05-31";
 const MAX_SELECTED_TOPICS = 3;
@@ -151,7 +154,7 @@ function runLarkCliOnce(argv) {
 	    timeout: 60_000,
 	    env: {
       ...process.env,
-      PATH: `/usr/local/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
+      PATH: `/usr/local/bin:/opt/homebrew/bin:${require("node:os").homedir()}/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
       LARK_CLI_NO_PROXY: "1",
     },
     maxBuffer: 50 * 1024 * 1024,

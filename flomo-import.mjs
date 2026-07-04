@@ -13,7 +13,9 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VAULT = "/Users/evander/Obsidian/OrbitOS";
+import { loadConfig } from "./lib/config.mjs";
+const _cfg = loadConfig();
+const VAULT = _cfg.vault_path;;
 const OUT_DIR = path.join(VAULT, "00_Inbox", "Flomo");
 
 function nowIso() {
