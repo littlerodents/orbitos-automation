@@ -1,0 +1,10 @@
+*.log
+*.err.log
+*.out.log
+.env
+.DS_Store
+node_modules/
+orbitos-feishu-flag-sync.log
+orbitos-git-sync.log
+orbitos-intake-loop.log
+orbitos-youmind-sync.log
