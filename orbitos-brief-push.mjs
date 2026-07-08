@@ -2,11 +2,11 @@
 // brief-push: detect new chore: daily brief / weekly synthesis commit, push to Feishu DM via lark-cli
 //   - skips already-pushed commits (by SHA) unless --force
 //   - pulls the brief file content, sends as markdown DM to owner user_id
-//   - GitHub API calls retried (5s wait, max 3 attempts); lark send verified via ok:true (max 2 retries)
-//   - send failures recorded to failed-commits.json
+//   - GitHub API calls via curl (--retry 3 retries transient TLS/5xx/429; 4xx fails fast); lark send verified via ok:true (max 2 retries)
+//   - send failures recorded to failed-commits.json; pipeline failures recorded to failed-runs.json + exit 0 (launchd retries next round)
 //   - not a n8n workflow: pure local launchd (independent from any n8n downtime)
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -20,13 +20,13 @@ const OWNER_USER_ID = _cfg.feishu_user_id;
 const STATE_DIR = join(homedir(), ".cache/orbitos-brief-push");
 const STATE_FILE = join(STATE_DIR, "pushed-commits.json");
 const FAILED_FILE = join(STATE_DIR, "failed-commits.json");
+const FAILED_RUNS_FILE = join(STATE_DIR, "failed-runs.json");
 const REPO = _cfg.github_owner + "/" + _cfg.github_repo;
 
-const GH_MAX_ATTEMPTS = 3;
 const RETRY_WAIT_MS = 5000;
 const SEND_MAX_ATTEMPTS = 3; // 1 initial + 2 retries
 
-const GH = process.env.GH_BIN || "/opt/homebrew/bin/gh";
+const CURL_BIN = process.env.CURL_BIN || "/usr/bin/curl";
 
 function sleepSync(ms) {
   try {
@@ -37,47 +37,70 @@ function sleepSync(ms) {
   }
 }
 
-// Injectable runners (defaults = real subprocess calls). Tests swap via setGhRunner/setLarkRunner.
-let ghRunner = (argv) => execFileSync(GH, argv, { encoding: "utf8" }).trim();
-let ghRetryWaitMs = RETRY_WAIT_MS;
-let sendRetryWaitMs = RETRY_WAIT_MS;
-let larkRunner = (argv) => {
+// Default curl runner: real curl subprocess with retry + auth. Response parsing delegated to parseGithubResponse.
+function defaultCurlRunner(urlPath) {
+  const token = process.env.GITHUB_TOKEN || _cfg.github_token;
+  if (!token) throw new Error("GITHUB_TOKEN not set (env or config.json github_token field)");
+  const result = spawnSync(CURL_BIN, [
+    "-s",
+    "--retry", "3",
+    "--retry-delay", "5",
+    "--connect-timeout", "10",
+    "--max-time", "30",
+    "-H", `Authorization: Bearer ${token}`,
+    "-H", "Accept: application/vnd.github+json",
+    `https://api.github.com${urlPath}`,
+  ], { encoding: "utf8" });
+  return parseGithubResponse(result.stdout, result.stderr, result.status);
+}
+
+// Parse curl response: throws on non-zero exit, non-JSON, or GitHub API error shape. Returns parsed JSON otherwise.
+export function parseGithubResponse(stdout, stderr, exitStatus) {
+  if (exitStatus !== 0) {
+    throw new Error(`curl failed (exit ${exitStatus}): ${stderr || "no stderr"}`);
+  }
+  let parsed;
+  try {
+    if (!stdout) throw new Error(`github api empty body (curl exit ${exitStatus})${stderr ? ': ' + stderr.slice(0, 200) : ''}`);
+    parsed = JSON.parse(stdout);
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      throw new Error(`github api non-json${stderr ? ' (stderr: ' + stderr.slice(0, 100) + ')' : ''}: ${(stdout || '<empty>').slice(0, 200)}`);
+    }
+    throw e;
+  }
+  // GitHub API error response shape: { message, documentation_url, status? }
+  if (parsed && typeof parsed === "object" && parsed.message && parsed.documentation_url) {
+    throw new Error(`github api error: ${parsed.message} (${parsed.status || "???"})`);
+  }
+  return parsed;
+}
+
+// Default lark runner: real lark-cli subprocess with PATH + no-proxy env.
+function defaultLarkRunner(argv) {
   const r = spawnSync(LARK_CLI, argv, { encoding: "utf8", env: {
     ...process.env,
     PATH: `/usr/local/bin:/opt/homebrew/bin:${join(homedir(), ".npm-global", "bin")}:${process.env.PATH || "/usr/bin:/bin"}`,
     LARK_CLI_NO_PROXY: "1",
   }});
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-};
-export function setGhRunner(fn) { ghRunner = fn; }
-export function setLarkRunner(fn) { larkRunner = fn; }
-export function setRetryWait(ms) { ghRetryWaitMs = ms; sendRetryWaitMs = ms; }
-export function resetRunners() {
-  ghRunner = (argv) => execFileSync(GH, argv, { encoding: "utf8" }).trim();
-  ghRetryWaitMs = RETRY_WAIT_MS;
-  sendRetryWaitMs = RETRY_WAIT_MS;
-  larkRunner = (argv) => {
-    const r = spawnSync(LARK_CLI, argv, { encoding: "utf8", env: {
-      ...process.env,
-      PATH: `/usr/local/bin:/opt/homebrew/bin:${join(homedir(), ".npm-global", "bin")}:${process.env.PATH || "/usr/bin:/bin"}`,
-      LARK_CLI_NO_PROXY: "1",
-    }});
-    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
-  };
 }
 
-function gh(...argv) { return ghRunner(argv); }
-export function ghWithRetry(...argv) {
-  let lastErr;
-  for (let attempt = 1; attempt <= GH_MAX_ATTEMPTS; attempt++) {
-    try {
-      return gh(...argv);
-    } catch (e) {
-      lastErr = e;
-      if (attempt < GH_MAX_ATTEMPTS) sleepSync(ghRetryWaitMs);
-    }
-  }
-  throw lastErr;
+// Injectable runners (defaults = real subprocess calls). Tests swap via setCurlRunner/setLarkRunner.
+let curlRunner = defaultCurlRunner;
+let sendRetryWaitMs = RETRY_WAIT_MS;
+let larkRunner = defaultLarkRunner;
+export function setCurlRunner(fn) { curlRunner = fn; }
+export function setLarkRunner(fn) { larkRunner = fn; }
+export function setRetryWait(ms) { sendRetryWaitMs = ms; }
+export function resetRunners() {
+  curlRunner = defaultCurlRunner;
+  sendRetryWaitMs = RETRY_WAIT_MS;
+  larkRunner = defaultLarkRunner;
+}
+
+export function curlGithub(urlPath) {
+  return curlRunner(urlPath);
 }
 
 function larkcliRaw(...argv) { return larkRunner(argv); }
@@ -111,18 +134,24 @@ export function markPushed(sha, kind, stateFile = STATE_FILE) {
   m[sha] = kind;
   writeFileSync(stateFile, JSON.stringify(m, null, 2));
 }
-export function appendFailed(sha, kind, error, failedFile = FAILED_FILE) {
-  const dir = join(failedFile, "..");
+function appendJsonArray(file, entry) {
+  const dir = join(file, "..");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   let arr = [];
-  if (existsSync(failedFile)) {
+  if (existsSync(file)) {
     try {
-      const parsed = JSON.parse(readFileSync(failedFile, "utf8"));
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
       arr = Array.isArray(parsed) ? parsed : [];
     } catch { arr = []; }
   }
-  arr.push({ sha, kind, error, failed_at: new Date().toISOString() });
-  writeFileSync(failedFile, JSON.stringify(arr, null, 2));
+  arr.push(entry);
+  writeFileSync(file, JSON.stringify(arr, null, 2));
+}
+export function appendFailed(sha, kind, error, failedFile = FAILED_FILE) {
+  appendJsonArray(failedFile, { sha, kind, error, failed_at: new Date().toISOString() });
+}
+export function appendFailedRun(error, failedRunsFile = FAILED_RUNS_FILE) {
+  appendJsonArray(failedRunsFile, { error: error.message, failed_at: new Date().toISOString() });
 }
 
 export function parseArgs(argv = process.argv.slice(2)) {
@@ -143,18 +172,23 @@ export function fetchBriefContent(c, repo = REPO) {
   let inferredPath = filePath;
   if (c.kind === "daily brief") {
     try {
-      const b64 = ghWithRetry("api", `repos/${repo}/contents/${inferredPath}?ref=${c.sha}`, "--jq", ".content");
-      content = Buffer.from(b64, "base64").toString("utf8");
+      const data = curlGithub(`/repos/${repo}/contents/${encodeURIComponent(inferredPath)}?ref=${c.sha}`);
+      if (typeof data.content === 'string') {
+        content = Buffer.from(data.content, "base64").toString("utf8");
+      }
     } catch (e) { /* fall through */ }
   } else {
     try {
-      const tree = ghWithRetry("api", `repos/${repo}/git/trees/${c.sha}?recursive=1`, "--jq",
-        '.tree | map(select(.path | startswith("10_Daily/weekly-"))) | .[].path');
-      const wpath = tree.split("\n").find(Boolean);
+      const treeData = curlGithub(`/repos/${repo}/git/trees/${c.sha}?recursive=1`);
+      const wpath = (treeData.tree || [])
+        .map((t) => t.path)
+        .find((p) => p.startsWith("10_Daily/weekly-"));
       if (wpath) {
         inferredPath = wpath;
-        const b64 = ghWithRetry("api", `repos/${repo}/contents/${inferredPath}?ref=${c.sha}`, "--jq", ".content");
-        content = Buffer.from(b64, "base64").toString("utf8");
+        const data = curlGithub(`/repos/${repo}/contents/${encodeURIComponent(inferredPath)}?ref=${c.sha}`);
+        if (typeof data.content === 'string') {
+          content = Buffer.from(data.content, "base64").toString("utf8");
+        }
       }
     } catch (e) { /* fall through */ }
   }
@@ -166,7 +200,7 @@ export function processCandidate(c, opts) {
   const { dryRun, force, pushed, stateFile = STATE_FILE, failedFile = FAILED_FILE, sendAttempts, sendWaitMs } = opts;
   if (!force && pushed[c.sha] === c.kind) return { pushed: false, failed: false, dry: false, skipped: true };
   const { content } = fetchBriefContent(c);
-  if (!content) {
+  if (content == null) {
     console.error(`skip ${c.sha}: no content fetchable`);
     return { pushed: false, failed: false, dry: false, skipped: true, noContent: true };
   }
@@ -188,25 +222,32 @@ export function processCandidate(c, opts) {
   return { pushed: false, failed: true, dry: false, error: result.error };
 }
 
-// Testable pipeline: no process.exit inside. Returns { code, fatal?, nothing?, results? }.
-// opts: { argv, ghRunner, larkRunner, retryWait, stateFile, failedFile }
+// Testable pipeline: no process.exit inside. Returns { code, nothing?, results? }. Throws on listing failure.
+// opts: { argv, curlRunner, larkRunner, retryWait, stateFile, failedFile }
 export async function runPipeline(opts = {}) {
   const { dryRun, force } = parseArgs(opts.argv);
-  if (opts.ghRunner) setGhRunner(opts.ghRunner);
+  if (opts.curlRunner) setCurlRunner(opts.curlRunner);
   if (opts.larkRunner) setLarkRunner(opts.larkRunner);
   if (opts.retryWait) setRetryWait(opts.retryWait);
   const stateFile = opts.stateFile ?? STATE_FILE;
   const failedFile = opts.failedFile ?? FAILED_FILE;
-  let raw;
-  try {
-    raw = ghWithRetry("api", `repos/${REPO}/commits?per_page=10`, "--jq",
-      '.[] | select(.commit.message | test("^chore: (daily brief|weekly synthesis) ")) | {sha: .sha, kind: (.commit.message | capture("^chore: (?<kind>daily brief|weekly synthesis)").kind), msg: .commit.message, date: .commit.author.date}');
-  } catch (e) {
-    return { code: 1, fatal: e.message };
-  }
-  if (!raw) return { code: 0, nothing: true, dryRun };
+  const commits = curlGithub(`/repos/${REPO}/commits?per_page=10`);
+  const candidates = (Array.isArray(commits) ? commits : [])
+    .filter((c) => /^chore: (daily brief|weekly synthesis) /.test(c.commit?.message || ""))
+    .map((c) => {
+      const msg = c.commit.message;
+      const kindMatch = msg.match(/(daily brief|weekly synthesis)/);
+      const dateMatch = msg.match(/(\d{4}-\d{2}-\d{2})/);
+      return {
+        sha: c.sha,
+        kind: kindMatch[1],
+        msg,
+        date: dateMatch ? dateMatch[1] : (c.commit.author?.date || "").slice(0, 10),
+      };
+    })
+    .reverse();
+  if (candidates.length === 0) return { code: 0, nothing: true, dryRun };
   const pushed = loadPushed(stateFile);
-  const candidates = raw.split("\n").filter(Boolean).map((line) => JSON.parse(line)).reverse();
   const results = [];
   for (const c of candidates) {
     results.push(processCandidate(c, { dryRun, force, pushed, stateFile, failedFile, sendAttempts: SEND_MAX_ATTEMPTS, sendWaitMs: sendRetryWaitMs }));
@@ -214,31 +255,40 @@ export async function runPipeline(opts = {}) {
   return { code: 0, results };
 }
 
-async function main() {
-  const r = await runPipeline();
-  if (r.code === 1) {
-    console.error(`FATAL: github commits listing failed after ${GH_MAX_ATTEMPTS} attempts: ${r.fatal}`);
-    process.exit(1);
+// Testable main: catches pipeline errors, logs to failed-runs.json, returns testable shape. No process.exit inside.
+// opts: { argv, curlRunner, larkRunner, retryWait, stateFile, failedFile, failedRunsFile }
+export async function runMain(opts = {}) {
+  const failedRunsFile = opts.failedRunsFile ?? FAILED_RUNS_FILE;
+  try {
+    const r = await runPipeline(opts);
+    if (r.nothing && !r.dryRun) console.log("nothing to push");
+    return r;
+  } catch (error) {
+    let logged = false;
+    try {
+      appendFailedRun(error, failedRunsFile);
+      logged = true;
+    } catch (logErr) {
+      console.error(`failed to log to failed-runs.json: ${logErr.message}`);
+    }
+    console.error(`logged failure (exit 0 for launchd): ${error.message}`);
+    return { code: 0, logged, error: error.message };
   }
-  if (r.nothing && !r.dryRun) console.log("nothing to push");
-  process.exit(0);
 }
 
 const thisFile = fileURLToPath(import.meta.url);
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(thisFile)) {
-  main();
+  runMain().then(() => { process.exitCode = 0; });
 }
 
 export {
-  GH_MAX_ATTEMPTS,
-  SEND_MAX_ATTEMPTS,
   RETRY_WAIT_MS,
+  SEND_MAX_ATTEMPTS,
   REPO,
   OWNER_USER_ID,
   STATE_DIR,
   STATE_FILE,
   FAILED_FILE,
-  ghWithRetry as gh,
+  FAILED_RUNS_FILE,
   sleepSync,
-  main,
 };
