@@ -7,16 +7,17 @@
 //   - not a n8n workflow: pure local launchd (independent from any n8n downtime)
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 import { loadConfig } from "./lib/config.mjs";
 
 const _cfg = loadConfig();
-const LARK_CLI = _cfg.lark_cli_path;
-const OWNER_USER_ID = _cfg.feishu_user_id;
+const LARK_CLI = process.env.LARK_CLI_PATH || _cfg.lark_cli_path;
+const OWNER_USER_ID = process.env.FEISHU_USER_ID || _cfg.feishu_user_id;
 const STATE_DIR = join(homedir(), ".cache/orbitos-brief-push");
 const STATE_FILE = join(STATE_DIR, "pushed-commits.json");
 const FAILED_FILE = join(STATE_DIR, "failed-commits.json");
@@ -78,6 +79,12 @@ export function parseGithubResponse(stdout, stderr, exitStatus) {
 
 // Default lark runner: real lark-cli subprocess with PATH + no-proxy env.
 function defaultLarkRunner(argv) {
+  if (!LARK_CLI || !String(LARK_CLI).trim()) {
+    throw new Error("lark cli path is required before send");
+  }
+  if (!OWNER_USER_ID || !String(OWNER_USER_ID).trim()) {
+    throw new Error("lark recipient id is required before send");
+  }
   const r = spawnSync(LARK_CLI, argv, { encoding: "utf8", env: {
     ...process.env,
     PATH: `/usr/local/bin:/opt/homebrew/bin:${join(homedir(), ".npm-global", "bin")}:${process.env.PATH || "/usr/bin:/bin"}`,
@@ -86,17 +93,28 @@ function defaultLarkRunner(argv) {
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
+function defaultGitRunner(repoPath, argv) {
+  const r = spawnSync("/usr/bin/git", ["-C", repoPath, ...argv], { encoding: "utf8" });
+  if (r.status !== 0) {
+    throw new Error(`git failed (exit ${r.status}): ${(r.stderr || r.stdout || "").trim()}`);
+  }
+  return r.stdout;
+}
+
 // Injectable runners (defaults = real subprocess calls). Tests swap via setCurlRunner/setLarkRunner.
 let curlRunner = defaultCurlRunner;
 let sendRetryWaitMs = RETRY_WAIT_MS;
 let larkRunner = defaultLarkRunner;
+let gitRunner = defaultGitRunner;
 export function setCurlRunner(fn) { curlRunner = fn; }
 export function setLarkRunner(fn) { larkRunner = fn; }
+export function setGitRunner(fn) { gitRunner = fn; }
 export function setRetryWait(ms) { sendRetryWaitMs = ms; }
 export function resetRunners() {
   curlRunner = defaultCurlRunner;
   sendRetryWaitMs = RETRY_WAIT_MS;
   larkRunner = defaultLarkRunner;
+  gitRunner = defaultGitRunner;
 }
 
 export function curlGithub(urlPath) {
@@ -106,19 +124,35 @@ export function curlGithub(urlPath) {
 function larkcliRaw(...argv) { return larkRunner(argv); }
 
 // returns { ok: true, data } on verified delivery, or { ok: false, error }
-export function sendBrief(markdown, attempts = SEND_MAX_ATTEMPTS, waitMs = sendRetryWaitMs) {
+export function sanitizeErrorText(value) {
+  return String(value ?? "")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, "$1[REDACTED]@")
+    .replace(/\bou_[A-Za-z0-9_-]+\b/g, "[REDACTED_FEISHU_OPEN_ID]");
+}
+
+export function sendBrief(markdown, attempts = SEND_MAX_ATTEMPTS, waitMs = sendRetryWaitMs, idempotencyKey = "") {
   let lastErr = "";
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const { status, stdout, stderr } = larkcliRaw(
-      "im", "+messages-send", "--as", "user", "--user-id", OWNER_USER_ID, "--markdown", markdown);
+    const argv = ["im", "+messages-send", "--as", "user", "--user-id", OWNER_USER_ID, "--markdown", markdown];
+    if (idempotencyKey) argv.push("--idempotency-key", idempotencyKey);
+    let status, stdout, stderr;
+    try {
+      ({ status, stdout, stderr } = larkcliRaw(...argv));
+    } catch (e) {
+      lastErr = `attempt ${attempt}: ${sanitizeErrorText(e.message)}`;
+      if (attempt < attempts) sleepSync(waitMs);
+      continue;
+    }
     let parsed = null;
     try { parsed = JSON.parse(stdout); } catch { /* non-JSON stdout */ }
     const ok = parsed && parsed.ok === true;
-    if (status === 0 && ok) return { ok: true, data: parsed && parsed.data };
-    lastErr = `attempt ${attempt}: exit=${status} ok=${parsed ? parsed.ok : "n/a"} ${(stderr || stdout || "").trim()}`;
+    if (status === 0 && ok) return { ok: true, data: parsed && parsed.data, attempts: attempt };
+    lastErr = sanitizeErrorText(`attempt ${attempt}: exit=${status} ok=${parsed ? parsed.ok : "n/a"} ${(stderr || stdout || "").trim()}`);
     if (attempt < attempts) sleepSync(waitMs);
   }
-  return { ok: false, error: lastErr };
+  return { ok: false, error: lastErr, attempts };
 }
 
 function ensureState(stateDir = STATE_DIR, stateFile = STATE_FILE) {
@@ -126,16 +160,45 @@ function ensureState(stateDir = STATE_DIR, stateFile = STATE_FILE) {
   if (!existsSync(stateFile)) writeFileSync(stateFile, "{}");
 }
 export function loadPushed(stateFile = STATE_FILE) {
-  ensureState(join(stateFile, ".."), stateFile);
+  ensureState(dirname(stateFile), stateFile);
   return JSON.parse(readFileSync(stateFile, "utf8"));
 }
-export function markPushed(sha, kind, stateFile = STATE_FILE) {
+export function readPushed(stateFile = STATE_FILE) {
+  if (!existsSync(stateFile)) return {};
+  return JSON.parse(readFileSync(stateFile, "utf8"));
+}
+function artifactKey(kind, period, artifactPath) {
+  return `${kind}|${period || ""}|${artifactPath || ""}`;
+}
+export function hasPushedArtifact(pushed, kind, period, artifactPath) {
+  const artifacts = pushed?.__artifacts;
+  if (!artifacts || typeof artifacts !== "object") return false;
+  const status = artifacts[artifactKey(kind, period, artifactPath)]?.status;
+  return status === "sent" || status === "bootstrapped";
+}
+export function markPushed(sha, kind, stateFile = STATE_FILE, meta = null) {
   const m = loadPushed(stateFile);
   m[sha] = kind;
+  if (meta?.period && meta?.path) {
+    m.__artifacts = m.__artifacts && typeof m.__artifacts === "object" ? m.__artifacts : {};
+    const key = artifactKey(kind, meta.period, meta.path);
+    const prev = m.__artifacts[key] || {};
+    const preserveSent = prev.status === "sent" && meta.status === "bootstrapped";
+    m.__artifacts[key] = {
+      kind,
+      period: meta.period,
+      path: meta.path,
+      commit: preserveSent ? prev.commit || meta.commit || sha : meta.commit || sha,
+      status: preserveSent ? "sent" : meta.status || prev.status || "sent",
+      attempts: preserveSent ? prev.attempts || 1 : Number.isInteger(meta.attempts) ? meta.attempts : prev.attempts || 1,
+      first_pushed_at: prev.first_pushed_at || new Date().toISOString(),
+      last_pushed_at: preserveSent ? prev.last_pushed_at || new Date().toISOString() : new Date().toISOString(),
+    };
+  }
   writeFileSync(stateFile, JSON.stringify(m, null, 2));
 }
 function appendJsonArray(file, entry) {
-  const dir = join(file, "..");
+  const dir = dirname(file);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   let arr = [];
   if (existsSync(file)) {
@@ -148,29 +211,140 @@ function appendJsonArray(file, entry) {
   writeFileSync(file, JSON.stringify(arr, null, 2));
 }
 export function appendFailed(sha, kind, error, failedFile = FAILED_FILE) {
-  appendJsonArray(failedFile, { sha, kind, error, failed_at: new Date().toISOString() });
+  appendJsonArray(failedFile, { sha, kind, error: sanitizeErrorText(error), failed_at: new Date().toISOString() });
 }
 export function appendFailedRun(error, failedRunsFile = FAILED_RUNS_FILE) {
-  appendJsonArray(failedRunsFile, { error: error.message, failed_at: new Date().toISOString() });
+  appendJsonArray(failedRunsFile, { error: sanitizeErrorText(error.message), failed_at: new Date().toISOString() });
 }
 
 export function parseArgs(argv = process.argv.slice(2)) {
+  const valueAfter = (flag) => {
+    const i = argv.indexOf(flag);
+    if (i < 0) return "";
+    if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
+      throw new Error(`${flag} requires a following path`);
+    }
+    return argv[i + 1];
+  };
   const set = new Set(argv);
+  const localRepo = valueAfter("--local-repo") || process.env.ORBITOS_VAULT_PATH || "";
+  if (set.has("--bootstrap") && !localRepo) {
+    throw new Error("--bootstrap requires local mode via --local-repo or ORBITOS_VAULT_PATH");
+  }
+  if (set.has("--dry-run") && set.has("--bootstrap")) {
+    throw new Error("--dry-run and --bootstrap are mutually exclusive");
+  }
   return {
     dryRun: set.has("--dry-run"),
     force: set.has("--force"),
+    bootstrap: set.has("--bootstrap"),
+    localRepo,
   };
+}
+
+export function parseBriefCommitLine(line) {
+  const nul = line.indexOf("\0");
+  if (nul < 1) return null;
+  const sha = line.slice(0, nul);
+  const msg = line.slice(nul + 1);
+  let m = msg.match(/^chore: daily brief (\d{4}-\d{2}-\d{2})$/);
+  if (m) {
+    return {
+      sha,
+      kind: "daily brief",
+      msg,
+      artifactPath: `00_Inbox/brief-${m[1]}.md`,
+    };
+  }
+  m = msg.match(/^chore: weekly synthesis W(\d{1,2}) (\d{4}-\d{2}-\d{2})$/);
+  if (m) {
+    const week = Number(m[1]);
+    if (!Number.isInteger(week) || week < 1 || week > 53) return null;
+    const paddedWeek = String(week).padStart(2, "0");
+    return {
+      sha,
+      kind: "weekly synthesis",
+      msg,
+      artifactPath: `10_Daily/weekly-W${paddedWeek}-${m[2]}.md`,
+    };
+  }
+  return null;
+}
+
+export function parseGithubCommit(c) {
+  const msg = c.commit?.message || "";
+  const subject = msg.split("\n")[0];
+  const line = `${c.sha}\0${subject}`;
+  const parsed = parseBriefCommitLine(line);
+  if (parsed) return parsed;
+  const legacy = subject.match(/^chore: weekly synthesis (\d{4}-\d{2}-\d{2})$/);
+  if (!legacy) return null;
+  return {
+    sha: c.sha,
+    kind: "weekly synthesis",
+    msg: subject,
+    date: legacy[1],
+  };
+}
+
+export function listLocalCandidates(localRepo) {
+  const out = gitRunner(localRepo, ["log", "-20", "--format=%H%x00%s"]);
+  return out.split("\n").filter(Boolean).map(parseBriefCommitLine).filter(Boolean).reverse();
+}
+
+export function deriveArtifactMeta(kind, artifactPath) {
+  let m = artifactPath.match(/^00_Inbox\/brief-(\d{4}-\d{2}-\d{2})\.md$/);
+  if (kind === "daily brief" && m) return { kind, period: m[1], path: artifactPath };
+  m = artifactPath.match(/^10_Daily\/weekly-(W\d{2}-\d{4}-\d{2}-\d{2})\.md$/);
+  if (kind === "weekly synthesis" && m) return { kind, period: m[1], path: artifactPath };
+  throw new Error(`invalid artifact path for ${kind}`);
+}
+
+export function larkIdempotencyKey(kind, period, artifactPath) {
+  const hash = createHash("sha256").update(`${kind}\0${period}\0${artifactPath}`).digest("hex");
+  return `brief-${hash.slice(0, 44)}`;
+}
+
+export function stripBriefBody(content) {
+  return content
+    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
+    .replace(/^# .*(?:\r?\n|$)/, "")
+    .trim();
+}
+
+export function validateArtifactContent(content) {
+  if (/^#{1,6}\s+(?:ERROR|RAW REASONING)\b.*$/im.test(content)) {
+    return { ok: false, error: "artifact contains forbidden heading" };
+  }
+  const body = stripBriefBody(content);
+  if (body.length < 300) {
+    return { ok: false, error: `artifact body too short (${body.length} chars)`, body };
+  }
+  return { ok: true, body };
 }
 
 // Fetch brief content for a candidate commit via GitHub contents API.
 // Returns { content, inferredPath } or { content: null } on fetch failure.
 export function fetchBriefContent(c, repo = REPO) {
-  const filePath = c.kind === "daily brief"
+  const filePath = c.artifactPath || (c.kind === "daily brief"
     ? `00_Inbox/brief-${c.date.slice(0, 10)}.md`
-    : `10_Daily/weekly-W${c.date.slice(0, 10)}/`.slice(0, -1);
+    : `10_Daily/weekly-W${c.date.slice(0, 10)}/`.slice(0, -1));
   let content = null;
   let inferredPath = filePath;
-  if (c.kind === "daily brief") {
+  if (c.localRepo) {
+    try {
+      content = gitRunner(c.localRepo, ["show", `${c.sha}:${inferredPath}`]);
+    } catch { content = null; }
+    return { content, inferredPath };
+  }
+  if (c.artifactPath) {
+    try {
+      const data = curlGithub(`/repos/${repo}/contents/${encodeURIComponent(inferredPath)}?ref=${c.sha}`);
+      if (typeof data.content === 'string') {
+        content = Buffer.from(data.content, "base64").toString("utf8");
+      }
+    } catch (e) { /* fall through */ }
+  } else if (c.kind === "daily brief") {
     try {
       const data = curlGithub(`/repos/${repo}/contents/${encodeURIComponent(inferredPath)}?ref=${c.sha}`);
       if (typeof data.content === 'string') {
@@ -197,62 +371,109 @@ export function fetchBriefContent(c, repo = REPO) {
 
 // Process one candidate: fetch + (dry-run | send + record). Returns { pushed, failed, dry }.
 export function processCandidate(c, opts) {
-  const { dryRun, force, pushed, stateFile = STATE_FILE, failedFile = FAILED_FILE, sendAttempts, sendWaitMs } = opts;
+  const { dryRun, force, bootstrap, pushed, stateFile = STATE_FILE, failedFile = FAILED_FILE, sendAttempts, sendWaitMs } = opts;
   if (!force && pushed[c.sha] === c.kind) return { pushed: false, failed: false, dry: false, skipped: true };
-  const { content } = fetchBriefContent(c);
+  const { content, inferredPath } = fetchBriefContent(c);
   if (content == null) {
-    console.error(`skip ${c.sha}: no content fetchable`);
+    console.error(sanitizeErrorText(`skip ${c.sha}: no content fetchable`));
     return { pushed: false, failed: false, dry: false, skipped: true, noContent: true };
   }
-  const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+  let meta;
+  try {
+    meta = deriveArtifactMeta(c.kind, inferredPath);
+  } catch (e) {
+    if (!dryRun) appendFailed(c.sha, c.kind, e.message, failedFile);
+    return { pushed: false, failed: true, dry: false, error: e.message };
+  }
+  const period = meta.period;
+  if (!force && hasPushedArtifact(pushed, c.kind, period, inferredPath)) {
+    if (bootstrap) {
+      markPushed(c.sha, c.kind, stateFile, {
+        period,
+        path: inferredPath,
+        commit: c.sha,
+        status: "bootstrapped",
+        attempts: 0,
+      });
+      return { pushed: false, failed: false, dry: false, bootstrapped: true, duplicateArtifact: true };
+    }
+    return { pushed: false, failed: false, dry: false, skipped: true, duplicateArtifact: true };
+  }
+  const validation = validateArtifactContent(content);
+  if (!validation.ok) {
+    if (!dryRun) appendFailed(c.sha, c.kind, validation.error, failedFile);
+    return { pushed: false, failed: true, dry: Boolean(dryRun), error: validation.error };
+  }
+  const body = validation.body;
   if (dryRun) {
     console.log(`DRY: would push ${c.kind} @ ${c.sha.slice(0, 7)} (${body.length} chars)`);
     return { pushed: false, failed: false, dry: true };
   }
+  if (bootstrap) {
+    markPushed(c.sha, c.kind, stateFile, {
+      period,
+      path: inferredPath,
+      commit: c.sha,
+      status: "bootstrapped",
+      attempts: 0,
+    });
+    return { pushed: false, failed: false, dry: false, bootstrapped: true };
+  }
   const title = c.kind === "daily brief" ? "## Brief" : "## Weekly Synthesis";
-  const md = `${title} — ${c.date.slice(0, 10)}\n\n${body}`;
-  const result = sendBrief(md, sendAttempts, sendWaitMs);
+  const md = `${title} — ${period}\n\n${body}`;
+  const idempotencyKey = larkIdempotencyKey(c.kind, period, inferredPath);
+  const result = sendBrief(md, sendAttempts, sendWaitMs, idempotencyKey);
   if (result.ok) {
-    markPushed(c.sha, c.kind, stateFile);
+    markPushed(c.sha, c.kind, stateFile, {
+      period,
+      path: inferredPath,
+      commit: c.sha,
+      status: "sent",
+      attempts: result.attempts,
+    });
     console.log(`pushed ${c.kind} @ ${c.sha.slice(0, 7)} (${body.length} chars)`);
     return { pushed: true, failed: false, dry: false };
   }
   appendFailed(c.sha, c.kind, result.error, failedFile);
-  console.error(`FAILED ${c.kind} @ ${c.sha.slice(0, 7)}: ${result.error}`);
+  console.error(sanitizeErrorText(`FAILED ${c.kind} @ ${c.sha.slice(0, 7)}: ${result.error}`));
   return { pushed: false, failed: true, dry: false, error: result.error };
 }
 
 // Testable pipeline: no process.exit inside. Returns { code, nothing?, results? }. Throws on listing failure.
 // opts: { argv, curlRunner, larkRunner, retryWait, stateFile, failedFile }
 export async function runPipeline(opts = {}) {
-  const { dryRun, force } = parseArgs(opts.argv);
+  const { dryRun, force, bootstrap, localRepo } = parseArgs(opts.argv);
   if (opts.curlRunner) setCurlRunner(opts.curlRunner);
   if (opts.larkRunner) setLarkRunner(opts.larkRunner);
+  if (opts.gitRunner) setGitRunner(opts.gitRunner);
   if (opts.retryWait) setRetryWait(opts.retryWait);
   const stateFile = opts.stateFile ?? STATE_FILE;
   const failedFile = opts.failedFile ?? FAILED_FILE;
-  const commits = curlGithub(`/repos/${REPO}/commits?per_page=10`);
-  const candidates = (Array.isArray(commits) ? commits : [])
-    .filter((c) => /^chore: (daily brief|weekly synthesis) /.test(c.commit?.message || ""))
-    .map((c) => {
-      const msg = c.commit.message;
-      const kindMatch = msg.match(/(daily brief|weekly synthesis)/);
-      const dateMatch = msg.match(/(\d{4}-\d{2}-\d{2})/);
-      return {
-        sha: c.sha,
-        kind: kindMatch[1],
-        msg,
-        date: dateMatch ? dateMatch[1] : (c.commit.author?.date || "").slice(0, 10),
-      };
-    })
-    .reverse();
-  if (candidates.length === 0) return { code: 0, nothing: true, dryRun };
-  const pushed = loadPushed(stateFile);
+  let candidates;
+  if (localRepo) {
+    candidates = listLocalCandidates(localRepo).map((c) => ({ ...c, localRepo }));
+  } else {
+    const commits = curlGithub(`/repos/${REPO}/commits?per_page=10`);
+    candidates = (Array.isArray(commits) ? commits : []).map(parseGithubCommit).filter(Boolean).reverse();
+  }
+  if (candidates.length === 0) return { code: 0, nothing: true, dryRun, bootstrap, localMode: Boolean(localRepo) };
+  const pushed = dryRun ? readPushed(stateFile) : loadPushed(stateFile);
   const results = [];
   for (const c of candidates) {
-    results.push(processCandidate(c, { dryRun, force, pushed, stateFile, failedFile, sendAttempts: SEND_MAX_ATTEMPTS, sendWaitMs: sendRetryWaitMs }));
+    const result = processCandidate(c, { dryRun, force, bootstrap, pushed, stateFile, failedFile, sendAttempts: SEND_MAX_ATTEMPTS, sendWaitMs: sendRetryWaitMs });
+    results.push(result);
+    if (result.pushed || result.bootstrapped) {
+      pushed[c.sha] = c.kind;
+      if (c.artifactPath) {
+        const meta = deriveArtifactMeta(c.kind, c.artifactPath);
+        pushed.__artifacts = pushed.__artifacts && typeof pushed.__artifacts === "object" ? pushed.__artifacts : {};
+        const key = artifactKey(c.kind, meta.period, meta.path);
+        const prev = pushed.__artifacts[key] || {};
+        pushed.__artifacts[key] = { ...prev, status: prev.status === "sent" && result.bootstrapped ? "sent" : result.bootstrapped ? "bootstrapped" : "sent" };
+      }
+    }
   }
-  return { code: 0, results };
+  return { code: 0, results, localMode: Boolean(localRepo), bootstrap };
 }
 
 // Testable main: catches pipeline errors, logs to failed-runs.json, returns testable shape. No process.exit inside.
@@ -269,10 +490,10 @@ export async function runMain(opts = {}) {
       appendFailedRun(error, failedRunsFile);
       logged = true;
     } catch (logErr) {
-      console.error(`failed to log to failed-runs.json: ${logErr.message}`);
+      console.error(sanitizeErrorText(`failed to log to failed-runs.json: ${logErr.message}`));
     }
-    console.error(`logged failure (exit 0 for launchd): ${error.message}`);
-    return { code: 0, logged, error: error.message };
+    console.error(sanitizeErrorText(`logged failure (exit 0 for launchd): ${error.message}`));
+    return { code: 0, logged, error: sanitizeErrorText(error.message) };
   }
 }
 
