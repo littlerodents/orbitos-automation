@@ -84,6 +84,16 @@ curl -s -X POST "https://YOUR-INSTANCE.app.n8n.cloud/api/v1/workflows/{id}/activ
 # Test brief-push (dry run, no actual Feishu DM)
 node orbitos-brief-push.mjs --dry-run
 
+# Shadow local brief-push dry run (local Git, no GitHub API token, no state write)
+node orbitos-brief-push.mjs --dry-run --local-repo /Users/shadow/Work/evander-orbitos-vault
+
+# One-time cutover ledger bootstrap (no Feishu send)
+node orbitos-brief-push.mjs --bootstrap --local-repo /Users/shadow/Work/evander-orbitos-vault
+
+# Test local synthesis prompt assembly (dry run, no LLM, no vault writes, no git)
+node orbitos-synthesis.mjs daily --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+node orbitos-synthesis.mjs weekly --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+
 # Test timeline fetcher (requires Chrome + CDP proxy)
 node monitor-timeline-fetcher.mjs
 
@@ -126,3 +136,36 @@ tests/*.test.mjs        n8n workflow JSON
 - **Tests fail with `not configured`**: Tests inject their own mocks, they don't need config.json. Make sure you're running from the repo root.
 - **n8n workflow 401**: Check that Set Vars has correct GitHub token + DeepSeek key.
 - **CDP proxy timeout**: Make sure Chrome is running with the extension, and X.com tab is open.
+
+## Local Synthesis Approval Gate
+
+`orbitos-synthesis.mjs` defaults to `--dry-run`; without explicit `--apply` it
+does not call DeepSeek, write the vault, commit, push, or send Feishu. Approve
+`--apply` only after confirming the matching n8n cloud workflow will not produce
+the same Daily or Weekly artifact.
+
+The included launchd plists are templates only. They are not installed, loaded,
+or enabled by this repository. The templates run dry-runs and use a wrapper that
+skips unless the macOS system timezone is `Asia/Shanghai`.
+
+Rollback: delete the local synthesis files or revert this repo change. For any
+separately approved apply run, revert the generated artifact and commit in the
+vault repository.
+
+## Local Brief Push Cutover
+
+`orbitos-brief-push.mjs --local-repo PATH` reads recent Daily Brief and Weekly
+Synthesis commits from local Git, fetches the exact committed markdown artifact
+with `git show`, validates it, and prepares Feishu delivery without needing a
+GitHub API token. `ORBITOS_VAULT_PATH` can provide the default local repo path.
+
+Use `--dry-run` first; it is read-only and does not write state or call Lark.
+Use `--bootstrap` once only after review to mark discovered historical artifacts
+as `bootstrapped`; bootstrap never sends and is idempotent.
+
+The Shadow launchd plist is a template only and explicitly runs the wrapper in
+`--dry-run` mode against `/Users/shadow/Work/evander-orbitos-vault`. Production
+activation requires a separately approved change from `--dry-run` to explicit
+`--send`, after reviewing dry-run output and Lark recipient setup. Real Lark
+authentication/sending and installing/loading any launchd job require a
+separately approved step.

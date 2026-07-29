@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.evander.orbitos-synthesis-daily</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/shadow/Work/orbitos-automation</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/shadow/Work/orbitos-automation/orbitos-synthesis-launchd.sh</string>
+    <string>daily</string>
+    <string>--dry-run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>ORBITOS_VAULT_PATH</key>
+    <string>/Users/shadow/Work/evander-orbitos-vault</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-synthesis-daily.launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-synthesis-daily.launchd.err.log</string>
+</dict>
+</plist>
