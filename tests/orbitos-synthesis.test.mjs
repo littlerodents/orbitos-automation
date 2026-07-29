@@ -96,6 +96,21 @@ test("buildDailyPlan includes prior-day date-only note at Daily 08:00 CST bounda
   }
 });
 
+test("buildDailyPlan excludes notes dated after the requested as-of cutoff", () => {
+  const v = tmpVault();
+  try {
+    v.write("00_Inbox/eligible.md", selectedNote("2026-07-16", "eligible inbox signal"));
+    v.write("00_Inbox/future.md", selectedNote("2026-07-29", "future inbox signal"));
+    v.write("30_Research/Selected/eligible.md", selectedNote("2026-07-12", "eligible selected signal"));
+    v.write("30_Research/Selected/future.md", selectedNote("2026-07-29", "future selected signal"));
+    const plan = buildDailyPlan({ vaultPath: v.root, date: "2026-07-17" });
+    assert.match(plan.userContent, /\[\[eligible\]\]/);
+    assert.doesNotMatch(plan.userContent, /future inbox signal|future selected signal/);
+  } finally {
+    v.cleanup();
+  }
+});
+
 test("buildWeeklyPlan computes ISO week, output path, projects, and deterministic old signal", () => {
   const v = tmpVault();
   try {
@@ -112,6 +127,22 @@ test("buildWeeklyPlan computes ISO week, output path, projects, and deterministi
     assert.equal(plan.counts.oldSignalCandidates, 2);
     assert.equal(plan.counts.projects, 1);
     assert.match(plan.userContent, /OLD SELECTED SIGNAL \(random revisit seed from 2 older candidates\)/);
+  } finally {
+    v.cleanup();
+  }
+});
+
+test("buildWeeklyPlan excludes selected notes dated after the requested as-of cutoff", () => {
+  const v = tmpVault();
+  try {
+    v.write("30_Research/Selected/eligible.md", selectedNote("2026-07-18", "eligible weekly signal"));
+    v.write("30_Research/Selected/future.md", selectedNote("2026-07-29", "future weekly signal"));
+    v.write("30_Research/Selected/old.md", selectedNote("2026-07-01", "old weekly signal"));
+    const plan = buildWeeklyPlan({ vaultPath: v.root, date: "2026-07-19" });
+    assert.equal(plan.counts.weekly, 1);
+    assert.equal(plan.counts.oldSignalCandidates, 1);
+    assert.match(plan.userContent, /eligible weekly signal/);
+    assert.doesNotMatch(plan.userContent, /future weekly signal/);
   } finally {
     v.cleanup();
   }

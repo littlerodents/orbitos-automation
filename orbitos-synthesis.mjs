@@ -133,9 +133,9 @@ export function buildDailyPlan({ vaultPath = DEFAULT_VAULT, date = todayCst(), m
     const rec = fileRecord(vaultPath, rel);
     const dateStr = frontmatterDate(rec.content);
     const fileTime = dateStr ? noteTimeMs(dateStr) : runAtMs;
-    if (rel.startsWith("00_Inbox/") && fileTime >= dayAgoMs) {
+    if (rel.startsWith("00_Inbox/") && fileTime >= dayAgoMs && fileTime <= runAtMs) {
       inbox.push({ ...rec, content: rec.content.slice(0, 1800), date: dateStr });
-    } else if (isStrongContent(rec.content, rel) && fileTime >= weekAgoMs) {
+    } else if (isStrongContent(rec.content, rel) && fileTime >= weekAgoMs && fileTime <= runAtMs) {
       research.push({ ...rec, content: rec.content.slice(0, 2600), date: dateStr });
     }
   }
@@ -184,7 +184,7 @@ export function buildWeeklyPlan({ vaultPath = DEFAULT_VAULT, date = todayCst(), 
     }
     const dateStr = frontmatterDate(rec.content, ["date", "created"]);
     const fileTime = dateStr ? noteTimeMs(dateStr) : runAtMs;
-    if (selectedSignal(rec.content, rel) && fileTime >= weekAgoMs) {
+    if (selectedSignal(rec.content, rel) && fileTime >= weekAgoMs && fileTime <= runAtMs) {
       weekly.push({ ...rec, content: rec.content.slice(0, 4000), date: dateStr });
     } else if (selectedSignal(rec.content, rel) && fileTime < weekAgoMs) {
       oldSignalCandidates.push({ ...rec, content: rec.content.slice(0, 2500), date: dateStr });
