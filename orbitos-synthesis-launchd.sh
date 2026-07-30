@@ -4,6 +4,7 @@ set -eu
 REPO="/Users/shadow/Work/orbitos-automation"
 NODE="/opt/homebrew/bin/node"
 VAULT="${ORBITOS_VAULT_PATH:-/Users/shadow/Work/evander-orbitos-vault}"
+EVIDENCE_DIR="${ORBITOS_EVIDENCE_DIR:-/Users/shadow/.local/share/orbitos-result-evidence}"
 MODE="${1:-daily}"
 ACTION="${2:---dry-run}"
 DATE_ARG="${3:-}"
@@ -16,12 +17,12 @@ if [ "$(/bin/ls -l /etc/localtime 2>/dev/null | /usr/bin/awk '{print $NF}')" != 
 fi
 
 if [ "$ACTION" != "--dry-run" ] && [ "$ACTION" != "--apply" ]; then
-  printf "usage: orbitos-synthesis-launchd.sh <daily|weekly> [--dry-run|--apply] [YYYY-MM-DD]\n"
+  printf "usage: orbitos-synthesis-launchd.sh <daily|weekly|result-daily|result-weekly> [--dry-run|--apply] [YYYY-MM-DD]\n"
   exit 2
 fi
 
 if [ -n "$DATE_ARG" ]; then
-  exec "$NODE" "$REPO/orbitos-synthesis.mjs" "$MODE" "$ACTION" --date "$DATE_ARG" --vault "$VAULT"
+  exec "$NODE" "$REPO/orbitos-synthesis.mjs" "$MODE" "$ACTION" --date "$DATE_ARG" --vault "$VAULT" --evidence-dir "$EVIDENCE_DIR"
 fi
 
-exec "$NODE" "$REPO/orbitos-synthesis.mjs" "$MODE" "$ACTION" --vault "$VAULT"
+exec "$NODE" "$REPO/orbitos-synthesis.mjs" "$MODE" "$ACTION" --vault "$VAULT" --evidence-dir "$EVIDENCE_DIR"

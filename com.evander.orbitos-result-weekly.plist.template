@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.evander.orbitos-result-weekly</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/shadow/Work/orbitos-automation</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/shadow/Work/orbitos-automation/orbitos-synthesis-launchd.sh</string>
+    <string>result-weekly</string>
+    <string>--apply</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>ORBITOS_VAULT_PATH</key>
+    <string>/Users/shadow/Work/evander-orbitos-vault</string>
+    <key>ORBITOS_EVIDENCE_DIR</key>
+    <string>/Users/shadow/.local/share/orbitos-result-evidence</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-result-weekly.launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-result-weekly.launchd.err.log</string>
+</dict>
+</plist>

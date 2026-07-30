@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// brief-push: detect new chore: daily brief / weekly synthesis commit, push to Feishu DM via lark-cli
+// Detect supported OrbitOS report commits and push exactly once to Feishu DM via lark-cli.
 //   - skips already-pushed commits (by SHA) unless --force
 //   - pulls the brief file content, sends as markdown DM to owner user_id
 //   - GitHub API calls via curl (--retry 3 retries transient TLS/5xx/429; 4xx fails fast); lark send verified via ok:true (max 2 retries)
@@ -135,7 +135,7 @@ export function sanitizeErrorText(value) {
 export function sendBrief(markdown, attempts = SEND_MAX_ATTEMPTS, waitMs = sendRetryWaitMs, idempotencyKey = "") {
   let lastErr = "";
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const argv = ["im", "+messages-send", "--as", "user", "--user-id", OWNER_USER_ID, "--markdown", markdown];
+    const argv = ["im", "+messages-send", "--as", "bot", "--user-id", OWNER_USER_ID, "--markdown", markdown];
     if (idempotencyKey) argv.push("--idempotency-key", idempotencyKey);
     let status, stdout, stderr;
     try {
@@ -268,6 +268,27 @@ export function parseBriefCommitLine(line) {
       artifactPath: `10_Daily/weekly-W${paddedWeek}-${m[2]}.md`,
     };
   }
+  m = msg.match(/^chore: result daily (\d{4}-\d{2}-\d{2})$/);
+  if (m) {
+    return {
+      sha,
+      kind: "result daily",
+      msg,
+      artifactPath: `10_Daily/result-daily-${m[1]}.md`,
+    };
+  }
+  m = msg.match(/^chore: result weekly W(\d{1,2}) (\d{4}-\d{2}-\d{2})$/);
+  if (m) {
+    const week = Number(m[1]);
+    if (!Number.isInteger(week) || week < 1 || week > 53) return null;
+    const paddedWeek = String(week).padStart(2, "0");
+    return {
+      sha,
+      kind: "result weekly",
+      msg,
+      artifactPath: `10_Daily/result-weekly-W${paddedWeek}-${m[2]}.md`,
+    };
+  }
   return null;
 }
 
@@ -297,6 +318,10 @@ export function deriveArtifactMeta(kind, artifactPath) {
   if (kind === "daily brief" && m) return { kind, period: m[1], path: artifactPath };
   m = artifactPath.match(/^10_Daily\/weekly-(W\d{2}-\d{4}-\d{2}-\d{2})\.md$/);
   if (kind === "weekly synthesis" && m) return { kind, period: m[1], path: artifactPath };
+  m = artifactPath.match(/^10_Daily\/result-daily-(\d{4}-\d{2}-\d{2})\.md$/);
+  if (kind === "result daily" && m) return { kind, period: m[1], path: artifactPath };
+  m = artifactPath.match(/^10_Daily\/result-weekly-(W\d{2}-\d{4}-\d{2}-\d{2})\.md$/);
+  if (kind === "result weekly" && m) return { kind, period: m[1], path: artifactPath };
   throw new Error(`invalid artifact path for ${kind}`);
 }
 
@@ -312,13 +337,61 @@ export function stripBriefBody(content) {
     .trim();
 }
 
-export function validateArtifactContent(content) {
+const RESULT_PUSH_SECTIONS = {
+  "result daily": [
+    "## 1. 证据与最新事实",
+    "## 2. 今天结束时必须留下的结果",
+    "## 3. 取舍与 24 小时时间账本",
+    "## 4. 思维模型强提醒",
+    "## 5. 其余相关模型",
+    "## 6. 能力与 Agent Team",
+    "## 7. 最小确认",
+  ],
+  "result weekly": [
+    "## 1. 本周证据与结果",
+    "## 2. 承诺与交付差距",
+    "## 3. 时间投向与取舍",
+    "## 4. 重复瓶颈与思维模型",
+    "## 5. 下周必须留下的结果",
+    "## 6. 停止清单与能力处方",
+    "## 7. 最小确认",
+  ],
+};
+
+export function validateArtifactContent(content, kind = "") {
   if (/^#{1,6}\s+(?:ERROR|RAW REASONING)\b.*$/im.test(content)) {
     return { ok: false, error: "artifact contains forbidden heading" };
   }
   const body = stripBriefBody(content);
   if (body.length < 300) {
     return { ok: false, error: `artifact body too short (${body.length} chars)`, body };
+  }
+  const required = RESULT_PUSH_SECTIONS[kind];
+  if (required) {
+    if (/(^|\n)\s*#{1,6}\s*(?:CONNECTIONS|PATTERN|QUESTION|BASE REMINDER|EMERGING THESIS|CONTRADICTIONS|KNOWLEDGE GAPS?)\b/i.test(body)) {
+      return { ok: false, error: "artifact contains legacy knowledge heading", body };
+    }
+    for (const section of required) {
+      if (!body.includes(section)) return { ok: false, error: `artifact missing required section: ${section}`, body };
+    }
+    const outcomeIndex = kind === "result daily" ? 1 : 4;
+    const outcomeSection = body.slice(
+      body.indexOf(required[outcomeIndex]) + required[outcomeIndex].length,
+      body.indexOf(required[outcomeIndex + 1]),
+    );
+    const outcomeCount = outcomeSection.split("\n").filter((line) => {
+      const trimmed = line.trim();
+      return /^\d{1,2}[.、)）]\s*/.test(trimmed)
+        || /^#{3,4}\s*(?:结果|Outcome)\s*[一二三123]?/i.test(trimmed)
+        || /^-\s+\*\*(?:结果|Outcome)\s*[:：]?/i.test(trimmed)
+        || /^\*\*(?:结果|Outcome)\s*[一二三123]?\s*[:：]?/i.test(trimmed);
+    }).length;
+    if (outcomeCount < 1 || outcomeCount > 3) {
+      return { ok: false, error: "artifact must contain between 1 and 3 outcomes", body };
+    }
+    if (kind === "result daily" && /(?:结果日报.{0,12}(?:生成|发送|发出|推送)|(?:生成|发送|发出|推送).{0,12}结果日报)/i.test(outcomeSection)) {
+      return { ok: false, error: "artifact contains self-referential report outcome", body };
+    }
   }
   return { ok: true, body };
 }
@@ -399,7 +472,7 @@ export function processCandidate(c, opts) {
     }
     return { pushed: false, failed: false, dry: false, skipped: true, duplicateArtifact: true };
   }
-  const validation = validateArtifactContent(content);
+  const validation = validateArtifactContent(content, c.kind);
   if (!validation.ok) {
     if (!dryRun) appendFailed(c.sha, c.kind, validation.error, failedFile);
     return { pushed: false, failed: true, dry: Boolean(dryRun), error: validation.error };
@@ -419,7 +492,17 @@ export function processCandidate(c, opts) {
     });
     return { pushed: false, failed: false, dry: false, bootstrapped: true };
   }
-  const title = c.kind === "daily brief" ? "## Brief" : "## Weekly Synthesis";
+  const title = {
+    "daily brief": "## Brief",
+    "weekly synthesis": "## Weekly Synthesis",
+    "result daily": "## 超级个体结果日报",
+    "result weekly": "## 超级个体结果周复盘",
+  }[c.kind];
+  if (!title) {
+    const error = `unsupported report kind: ${c.kind}`;
+    appendFailed(c.sha, c.kind, error, failedFile);
+    return { pushed: false, failed: true, dry: false, error };
+  }
   const md = `${title} — ${period}\n\n${body}`;
   const idempotencyKey = larkIdempotencyKey(c.kind, period, inferredPath);
   const result = sendBrief(md, sendAttempts, sendWaitMs, idempotencyKey);

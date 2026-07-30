@@ -5,8 +5,10 @@ import {
   isRecentFile, extractNoteTitle, extractConfidence, extractTopics,
   isNoiseNote, buildAnalystMarkdown, shouldWriteAnalystNote,
   readSelectedNotes, readProjectContext, analyzePatterns, processAnalystTask,
-  setGhCaller, setDeepSeekCaller, setStateVars, resetRunners,
+  setGhCaller, setDeepSeekCaller, setStateVars, setNowProvider, resetRunners,
 } from "../analyst-agent-logic.mjs";
+
+test.beforeEach(() => setNowProvider(() => new Date("2026-07-02T12:00:00.000Z")));
 
 function mulberry32(seed) {
   let a = seed >>> 0;

@@ -8,12 +8,19 @@ import { loadConfig } from "./lib/config.mjs";
 // ============ Injectable runners (DI) ============
 let ghCaller = async (_method, _path, _body) => { throw new Error("ghCaller not configured"); };
 let stateVars = { OWNER: "", REPO: "", BRANCH: "" };
+let nowProvider = () => new Date();
 
 export function setGhCaller(fn) { ghCaller = fn; }
 export function setStateVars(vars) { stateVars = vars; }
+export function setNowProvider(fn) { nowProvider = fn; }
 export function resetRunners() {
   ghCaller = async () => { throw new Error("ghCaller not configured"); };
   stateVars = { OWNER: "", REPO: "", BRANCH: "" };
+  nowProvider = () => new Date();
+}
+
+function nowCst() {
+  return new Date(nowProvider().getTime() + 8 * 3600 * 1000);
 }
 
 // ============ Pure functions ============
@@ -184,7 +191,7 @@ export async function readBrief(today) {
 export async function readResearcherNotes(today, hours) {
   const list = await ghGet("30_Research/Selected");
   if (!list || !Array.isArray(list)) return [];
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const now = nowCst();
   const recent = list.filter(f => f.name && f.name.startsWith("researcher-") && isRecentFile(f.name, hours || 24, now));
   const results = [];
   for (const f of recent) {
@@ -235,7 +242,7 @@ export async function readMonitorDigests(today) {
 export async function readFeishuFlags() {
   const list = await ghGet("00_Inbox");
   if (!list || !Array.isArray(list)) return [];
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const now = nowCst();
   const recent = list.filter(f => f.name && f.name.startsWith("feishu-") && isRecentFile(f.name, 168, now));
   return extractFeishuFlags(recent);
 }
@@ -243,7 +250,7 @@ export async function readFeishuFlags() {
 // ============ Main pipeline ============
 
 export async function processTodayTask() {
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const now = nowCst();
   const today = now.toISOString().slice(0, 10);
 
   const briefContent = await readBrief(today);

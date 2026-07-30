@@ -7,8 +7,10 @@ import {
   isRecentFile, buildTodayMd,
   readBrief, readResearcherNotes, readAnalystNote, readFilterDigests,
   readMonitorDigests, readFeishuFlags, processTodayTask,
-  setGhCaller, setStateVars, resetRunners,
+  setGhCaller, setStateVars, setNowProvider, resetRunners,
 } from "../today-md-logic.mjs";
+
+test.beforeEach(() => setNowProvider(() => new Date("2026-07-05T12:00:00.000Z")));
 
 function mulberry32(seed) {
   let a = seed >>> 0;
