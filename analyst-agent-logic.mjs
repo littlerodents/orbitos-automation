@@ -6,14 +6,21 @@
 let ghCaller = async (_method, _path, _body) => { throw new Error("ghCaller not configured"); };
 let deepSeekCaller = async (_messages) => { throw new Error("deepSeekCaller not configured"); };
 let stateVars = { OWNER: "", REPO: "", BRANCH: "" };
+let nowProvider = () => new Date();
 
 export function setGhCaller(fn) { ghCaller = fn; }
 export function setDeepSeekCaller(fn) { deepSeekCaller = fn; }
 export function setStateVars(vars) { stateVars = vars; }
+export function setNowProvider(fn) { nowProvider = fn; }
 export function resetRunners() {
   ghCaller = async () => { throw new Error("ghCaller not configured"); };
   deepSeekCaller = async () => { throw new Error("deepSeekCaller not configured"); };
   stateVars = { OWNER: "", REPO: "", BRANCH: "" };
+  nowProvider = () => new Date();
+}
+
+function nowCst() {
+  return new Date(nowProvider().getTime() + 8 * 3600 * 1000);
 }
 
 // ============ Pure functions ============
@@ -103,7 +110,7 @@ export async function readSelectedNotes(days) {
   const list = await ghCaller("GET", "30_Research/Selected", null);
   if (!list || !Array.isArray(list)) return [];
 
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const now = nowCst();
   const notes = [];
   for (const f of list) {
     if (!f.name || !f.name.endsWith(".md")) continue;
@@ -190,7 +197,7 @@ export async function processAnalystTask(opts = {}) {
 
   if (!shouldWrite) return { no_action: true, notesCount: notes.length, reason: "0 signposts + notes <= 2" };
 
-  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = nowCst().toISOString().slice(0, 10);
   const relatedNotes = notes.map(n => n.name);
   const md = buildAnalystMarkdown(analysis, today, relatedNotes);
   const mdB64 = Buffer.from(md, "utf8").toString("base64");

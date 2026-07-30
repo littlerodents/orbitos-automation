@@ -100,9 +100,43 @@ and writes logs under `/Users/shadow/Library/Logs`. Production activation is a
 separately approved change to the wrapper mode: replace `--dry-run` with explicit
 `--send` only after reviewing the dry-run output and Lark recipient setup.
 
-## Local Synthesis Runtime (not enabled)
+## Result-Led Review Runtime (prepared, not enabled by the repository)
 
-`orbitos-synthesis.mjs` builds Daily Brief and Weekly Synthesis prompts from a
+The current product is an evidence-driven execution review, not a knowledge
+digest. The primary Mac collects a minimized packet from parent Codex/Claude
+sessions plus Feishu Calendar/Minutes. Raw conversations, tool output,
+credentials, Feishu IDs, and minute tokens remain outside the vault and Git.
+Shadow consumes those packets and active project context to produce:
+
+- `10_Daily/result-daily-YYYY-MM-DD.md` — `超级个体结果日报`
+- `10_Daily/result-weekly-WNN-YYYY-MM-DD.md` — `超级个体结果周复盘`
+
+The daily contract requires evidence, 1–3 verifiable outcomes, a real 24-hour
+time ledger using the 2.0 planning multiplier, explicit cuts, situational mental
+model reminders, one capability prescription, and one minimal confirmation.
+The weekly contract compares commitments with delivered results and creates the
+next week's result and stop lists. A semantic gate rejects legacy knowledge
+headings such as `CONNECTIONS`, `PATTERN`, and `EMERGING THESIS`.
+
+Safe local checks:
+
+```bash
+node orbitos-result-evidence.mjs --date 2026-07-29 --host primary --include-feishu --dry-run
+node orbitos-synthesis.mjs result-daily --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+node orbitos-synthesis.mjs result-weekly --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+```
+
+The prepared schedules are daily at 10:00 Asia/Shanghai and weekly on Sunday at
+10:15. The primary evidence collector runs every 15 minutes; the result push
+checks every 5 minutes and sends with the bot identity. All templates are
+key-free. Live installation is guarded by `ORBITOS_CUTOVER_APPROVED=YES` and is
+additionally blocked until the operator confirms the two n8n Cloud Daily/Weekly
+workflows are inactive with `ORBITOS_CLOUD_DAILY_WEEKLY_DISABLED=YES`. The exact
+cutover is documented in `TOMORROW_RESULT_CUTOVER.md`.
+
+## Legacy Local Synthesis Runtime (retained, disabled)
+
+`orbitos-synthesis.mjs` still supports historical Daily Brief and Weekly Synthesis prompts from a
 local vault checkout using the same selected-path strategy as the n8n workflows.
 Default mode is dry-run:
 
@@ -125,15 +159,14 @@ non-content ledger in `$XDG_STATE_HOME/orbitos-synthesis/runs.json` or
 `~/.local/state/orbitos-synthesis/runs.json`. Do not use `--apply` while the
 cloud workflow remains active for the same artifact.
 
-Uninstalled launchd templates are provided as
+Legacy uninstalled launchd templates are retained as
 `com.evander.orbitos-synthesis-daily.plist.template` and
 `com.evander.orbitos-synthesis-weekly.plist.template`; both call the wrapper in
 `--dry-run` mode and require the system timezone to be `Asia/Shanghai`.
 
-Rollback for this local runtime is file-level: remove the synthesis script,
-tests, wrapper, plist templates, and this documentation section. If an approved
-apply run created a vault artifact, revert that artifact and its git commit in
-the vault repository.
+The legacy launchd labels stay disabled during the result-runtime cutover. They
+are not automatically re-enabled by rollback because doing so would recreate
+duplicate, rejected reports.
 
 ## Testing
 

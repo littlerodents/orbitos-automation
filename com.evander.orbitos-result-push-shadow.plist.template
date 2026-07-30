@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.evander.orbitos-result-push-shadow</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/shadow/Work/orbitos-automation/orbitos-brief-push-launchd.sh</string>
+    <string>--send</string>
+    <string>/Users/shadow/Work/evander-orbitos-vault</string>
+  </array>
+  <key>StandardOutPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-result-push-shadow.launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/shadow/Library/Logs/orbitos-result-push-shadow.launchd.err.log</string>
+</dict>
+</plist>

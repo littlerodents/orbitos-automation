@@ -94,6 +94,11 @@ node orbitos-brief-push.mjs --bootstrap --local-repo /Users/shadow/Work/evander-
 node orbitos-synthesis.mjs daily --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
 node orbitos-synthesis.mjs weekly --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
 
+# Test the result-led replacement and minimized evidence collector
+node orbitos-result-evidence.mjs --date 2026-07-29 --host primary --include-feishu --dry-run
+node orbitos-synthesis.mjs result-daily --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+node orbitos-synthesis.mjs result-weekly --dry-run --date 2026-07-29 --vault /Users/shadow/Work/evander-orbitos-vault
+
 # Test timeline fetcher (requires Chrome + CDP proxy)
 node monitor-timeline-fetcher.mjs
 
@@ -169,3 +174,20 @@ activation requires a separately approved change from `--dry-run` to explicit
 `--send`, after reviewing dry-run output and Lark recipient setup. Real Lark
 authentication/sending and installing/loading any launchd job require a
 separately approved step.
+
+## Result-Led Cutover
+
+`Daily Brief` and `Weekly Synthesis` are retained as history but their launchd
+labels remain disabled. The replacement writes `result-daily-*` and
+`result-weekly-*` artifacts with a semantic gate that requires the seven product
+sections and rejects the old knowledge-synthesis headings.
+
+The primary collector writes mode-600 JSON under
+`~/.local/share/orbitos-result-evidence/`, outside Obsidian and Git, then uses
+non-interactive SSH to atomically replace the matching packet on Shadow. If
+Shadow is offline, the local packet is preserved and the collector exits without
+changing the vault.
+
+Use the staged, fail-closed runbook in `TOMORROW_RESULT_CUTOVER.md`. Installation
+and the one real acceptance send are separate commands so a green mechanical
+preflight cannot be mistaken for product acceptance.
