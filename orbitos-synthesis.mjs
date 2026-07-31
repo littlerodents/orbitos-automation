@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_MODEL = "deepseek-v4-flash";
 const DEFAULT_ENDPOINT = "https://api.deepseek.com/v1/chat/completions";
+const DEFAULT_DEEPSEEK_TIMEOUT_MS = 180_000;
 const DEFAULT_LEDGER_BASENAME = "runs.json";
 const DEFAULT_VAULT = existsSync("/Users/shadow/Work/evander-orbitos-vault")
   ? "/Users/shadow/Work/evander-orbitos-vault"
@@ -31,6 +32,13 @@ export function defaultLedgerPath(env = process.env) {
 }
 
 const DEFAULT_LEDGER = defaultLedgerPath();
+
+export function resolveDeepSeekTimeoutMs(value) {
+  const timeoutMs = Number(value);
+  return Number.isInteger(timeoutMs) && timeoutMs >= 1_000 && timeoutMs <= 600_000
+    ? timeoutMs
+    : DEFAULT_DEEPSEEK_TIMEOUT_MS;
+}
 
 export function scheduledInstantMs(kind, date) {
   const hour = kind === "daily" ? "08" : "10";
@@ -848,7 +856,7 @@ async function defaultLlmClient({ endpoint, apiKey, model, messages }) {
         "Content-Length": Buffer.byteLength(body),
         Authorization: `Bearer ${apiKey}`,
       },
-      timeout: 60000,
+      timeout: resolveDeepSeekTimeoutMs(process.env.DEEPSEEK_TIMEOUT_MS),
     }, (res) => {
       let data = "";
       res.setEncoding("utf8");

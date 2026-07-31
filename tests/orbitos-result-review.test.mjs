@@ -10,6 +10,7 @@ import {
   defaultOutputPath,
   extractAssistantText,
   renderArtifact,
+  resolveDeepSeekTimeoutMs,
   runSynthesis,
   validateResultArtifact,
 } from "../orbitos-synthesis.mjs";
@@ -92,6 +93,14 @@ function validWeeklyBody() {
 ## 7. 最小确认
 下周的第一结果是否确认由发布决定承担？`;
 }
+
+test("DeepSeek report requests allow slow generations while bounding overrides", () => {
+  assert.equal(resolveDeepSeekTimeoutMs(undefined), 180_000);
+  assert.equal(resolveDeepSeekTimeoutMs("90000"), 90_000);
+  assert.equal(resolveDeepSeekTimeoutMs("999"), 180_000);
+  assert.equal(resolveDeepSeekTimeoutMs("not-a-number"), 180_000);
+  assert.equal(resolveDeepSeekTimeoutMs("600001"), 180_000);
+});
 
 test("result daily plan uses only as-of evidence and treats it as untrusted data", () => {
   const f = fixture();
