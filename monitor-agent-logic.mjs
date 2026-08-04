@@ -183,8 +183,10 @@ export async function getTabSignals() {
 }
 
 export async function saveSeenIds(ids) {
-  const b64 = Buffer.from(JSON.stringify(ids)).toString("base64");
-  try { await ghCaller("PUT", "00_Inbox/.monitor-seen-ids.json", { message: "monitor: update seen ids", content: b64, branch: stateVars.BRANCH }); } catch {}
+  // slice 防爆：无界增长终会撞 Contents API 1MB 上限，导致 PUT 永久失败、去重静默失效
+  const b64 = Buffer.from(JSON.stringify(ids.slice(-2000))).toString("base64");
+  try { await ghCaller("PUT", "00_Inbox/.monitor-seen-ids.json", { message: "monitor: update seen ids", content: b64, branch: stateVars.BRANCH }); }
+  catch (e) { console.error("saveSeenIds failed:", e.message); }
 }
 
 export async function buildSummaryEntry(tweet, vaultBaseline) {
@@ -194,6 +196,8 @@ export async function buildSummaryEntry(tweet, vaultBaseline) {
     const content = await tweetContentGetter(String(tweet.id));
     if (content) fullContent = content.slice(0, 800);
   } catch {}
+  // 空正文不进 LLM —— 否则会产出"无法判断增量"的垃圾 entry 写进 vault（2026-08-04 实证）
+  if (!fullContent.trim()) return null;
 
   const prompt = '你是信息助手。主人关注的人发了一条推文。\n\n主人 vault 已有知识：\n' + vaultBaseline + '\n\n推文作者：' + (tweet.author || tweet.username || '') + '\n推文内容：' + fullContent + '\n互动量：' + score + '\n\n请输出：\n1. title: ≤20字中文标题（谁+说了什么）\n2. summary: ≤40字中文摘要\n3. increment: 这条对主人有什么增量？（如果没有增量，输出无增量）\n\n输出JSON: {"title":"","summary":"","increment":""}';
 
@@ -203,7 +207,11 @@ export async function buildSummaryEntry(tweet, vaultBaseline) {
       { role: "system", content: "你是信息助手，帮主人判断推文的增量价值。" },
       { role: "user", content: prompt }
     ]);
-  } catch { return null; }
+  } catch (e) {
+    // fail loud：LLM 调用失败 ≠ "无增量"，日志里必须能区分
+    console.error("deepSeekCaller failed for tweet", tweet.id, ":", e.message);
+    return null;
+  }
 
   if (!resp || !resp.choices || !resp.choices[0] || !resp.choices[0].message) return null;
   const text = resp.choices[0].message.content || "";
@@ -211,7 +219,8 @@ export async function buildSummaryEntry(tweet, vaultBaseline) {
   if (!jsonMatch) return null;
   try {
     const parsed = JSON.parse(jsonMatch[0]);
-    if (parsed.increment && parsed.increment.includes("无增量")) return null;
+    if (!parsed.title || !parsed.summary) return null; // 残缺的 entry 不收
+    if (parsed.increment && /无(增量|法判断|新内容)/.test(parsed.increment)) return null;
     return {
       id: String(tweet.id || ""),
       author: tweet.author || tweet.username || "",
@@ -233,12 +242,13 @@ export async function processMonitorTask(opts = {}) {
   const maxPerAuthor = opts.maxPerAuthor || 2;
   const maxEntries = opts.maxEntries || 5;
 
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
-  const date = now.toISOString().slice(0, 10);
-  const period = getPeriod(now.getUTCHours());
+  const now = new Date(); // 真实时间：时间过滤必须用它
+  const cstNow = new Date(Date.now() + 8 * 3600 * 1000); // 北京时标签：仅用于 date/period 文件名
+  const date = cstNow.toISOString().slice(0, 10);
+  const period = getPeriod(cstNow.getUTCHours());
 
-  let timeline;
-  try { timeline = await timelineGetter(); } catch { timeline = []; }
+  // 拉取失败直接抛错（fail loud）——绝不容忍"故障被写成'今日无内容'的假 digest"
+  const timeline = await timelineGetter();
   if (!timeline || !timeline.length) {
     const md = buildMonitorMarkdown([], date, period);
     return {
