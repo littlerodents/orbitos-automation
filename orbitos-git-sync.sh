@@ -36,18 +36,17 @@ if [ "$BEHIND" = "0" ]; then
   exit 0
 fi
 
-if ! git -C "$VAULT" diff --quiet; then
-  log "skip: tracked working tree changes present; ahead=$AHEAD behind=$BEHIND"
-  exit 0
-fi
-
-if ! git -C "$VAULT" diff --cached --quiet; then
-  log "skip: staged changes present; ahead=$AHEAD behind=$BEHIND"
-  exit 0
-fi
-
-if git -C "$VAULT" pull --ff-only origin main >> "$LOG" 2>&1; then
-  log "ok: pulled remote changes; ahead=$AHEAD behind=$BEHIND"
+# rebase + autostash：本地有未提交改动先暂存、本地有提交则变基到远端之上，
+# 不再因为脏树或本地 commit 就永久跳过（2026-08-03 修：曾因脏树卡住落后 39 个 commit）
+if git -C "$VAULT" pull --rebase --autostash origin main >> "$LOG" 2>&1; then
+  log "ok: rebased onto remote; ahead=$AHEAD behind=$BEHIND"
 else
-  log "error: pull --ff-only failed; ahead=$AHEAD behind=$BEHIND"
+  # 冲突卡死会每 5 分钟稳定失败——abort 兜底回到干净状态，下轮重试
+  log "error: pull --rebase --autostash failed; ahead=$AHEAD behind=$BEHIND; aborting rebase"
+  git -C "$VAULT" rebase --abort >> "$LOG" 2>&1 || true
+fi
+
+# autostash 警示：pop 冲突会把主人未提交改动留在 stash 里，必须显眼提示
+if [ -n "$(git -C "$VAULT" stash list 2>/dev/null)" ]; then
+  log "WARNING: stash 非空（可能是 autostash 未恢复）：$(git -C "$VAULT" stash list | head -1)——请人工检查 git stash pop"
 fi
