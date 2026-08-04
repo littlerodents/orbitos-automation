@@ -5,21 +5,23 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  ghWithRetry,
+  curlGithub,
+  parseGithubResponse,
   sendBrief,
   appendFailed,
+  appendFailedRun,
   markPushed,
   loadPushed,
   parseArgs,
   fetchBriefContent,
   processCandidate,
-  setGhRunner,
+  setCurlRunner,
   setLarkRunner,
   setRetryWait,
   resetRunners,
   runPipeline,
+  runMain,
   sleepSync,
-  GH_MAX_ATTEMPTS,
   SEND_MAX_ATTEMPTS,
 } from "../orbitos-brief-push.mjs";
 
@@ -41,17 +43,18 @@ function tmpStateDir() {
   return {
     stateFile: path.join(d, "pushed-commits.json"),
     failedFile: path.join(d, "failed-commits.json"),
+    failedRunsFile: path.join(d, "failed-runs.json"),
     cleanup: () => rmSync(d, { recursive: true, force: true }),
   };
 }
 
-// mock gh runner: calls a per-call handler with the attempt index.
-// handler returns string (success) or throws (failure).
-function makeGhMock(handler) {
+// mock curl runner: calls a per-call handler with the attempt index.
+// handler returns object (success) or throws (failure).
+function makeCurlMock(handler) {
   let attempts = 0;
-  const fn = (argv) => {
+  const fn = (urlPath) => {
     attempts++;
-    return handler(argv, attempts);
+    return handler(urlPath, attempts);
   };
   fn.attempts = () => attempts;
   return fn;
@@ -70,6 +73,9 @@ function makeLarkMock(handler) {
 const okJson = (extra = "") => JSON.stringify({ ok: true, data: { chat_id: "oc_x", message_id: "om_y", ...({}) } }) + extra;
 const failJson = (extra = "") => JSON.stringify({ ok: false, error: { message: extra || "boom" } });
 
+// raw GitHub commit shape helper
+const rawCommit = (sha, message, date) => ({ sha, commit: { message, author: { date } } });
+
 // ============================ targeted edge tests ============================
 
 test("parseArgs parses --dry-run and --force in any combination", () => {
@@ -79,32 +85,57 @@ test("parseArgs parses --dry-run and --force in any combination", () => {
   assert.deepEqual(parseArgs(["--dry-run", "--force", "extra"]), { dryRun: true, force: true });
 });
 
-test("ghWithRetry succeeds on first attempt (no retry)", () => {
-  const gh = makeGhMock(() => "ok");
-  setGhRunner(gh);
-  assert.equal(ghWithRetry("api", "x"), "ok");
-  assert.equal(gh.attempts(), 1);
+test("curlGithub returns curlRunner result (object)", () => {
+  setCurlRunner(() => ({ ok: true, sha: "abc" }));
+  assert.deepEqual(curlGithub("/repos/x/y/commits"), { ok: true, sha: "abc" });
   resetRunners();
 });
 
-test("ghWithRetry retries up to GH_MAX_ATTEMPTS then throws", () => {
-  setRetryWait(1);
-  const gh = makeGhMock(() => { throw new Error("tls timeout"); });
-  setGhRunner(gh);
-  assert.throws(() => ghWithRetry("api", "x"), /tls timeout/);
-  assert.equal(gh.attempts(), GH_MAX_ATTEMPTS);
+test("curlGithub returns curlRunner result (array)", () => {
+  setCurlRunner(() => [1, 2, 3]);
+  assert.deepEqual(curlGithub("/repos/x/y/commits"), [1, 2, 3]);
   resetRunners();
 });
 
-test("ghWithRetry succeeds after transient failures (attempt 2 or 3)", () => {
-  setRetryWait(1);
-  for (const succeedAt of [2, 3]) {
-    const gh = makeGhMock((_a, n) => (n >= succeedAt ? "recovered" : (() => { throw new Error("temp"); })()));
-    setGhRunner(gh);
-    assert.equal(ghWithRetry("api", "x"), "recovered");
-    assert.equal(gh.attempts(), succeedAt);
-  }
+test("curlGithub propagates curlRunner throw (no JS retry)", () => {
+  setCurlRunner(() => { throw new Error("tls timeout"); });
+  assert.throws(() => curlGithub("/repos/x/y/commits"), /tls timeout/);
   resetRunners();
+});
+
+test("parseGithubResponse: valid JSON object → returns parsed", () => {
+  assert.deepEqual(parseGithubResponse('{"ok":true}', "", 0), { ok: true });
+});
+
+test("parseGithubResponse: valid JSON array → returns parsed", () => {
+  assert.deepEqual(parseGithubResponse('[1,2,3]', "", 0), [1, 2, 3]);
+});
+
+test("parseGithubResponse: non-zero exit → throws with exit code + stderr", () => {
+  assert.throws(() => parseGithubResponse("", "connection refused", 7), /curl failed \(exit 7\): connection refused/);
+});
+
+test("parseGithubResponse: non-zero exit with empty stderr → throws with 'no stderr'", () => {
+  assert.throws(() => parseGithubResponse("", "", 28), /no stderr/);
+});
+
+test("parseGithubResponse: non-JSON stdout → throws with body preview", () => {
+  assert.throws(() => parseGithubResponse("not json at all", "", 0), /github api non-json: not json at all/);
+});
+
+test("parseGithubResponse: empty stdout → throws empty body error", () => {
+  assert.throws(() => parseGithubResponse("", "", 0), /empty body/);
+});
+
+test("parseGithubResponse: GitHub API error shape → throws with message + status", () => {
+  const err = JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com", status: "404" });
+  assert.throws(() => parseGithubResponse(err, "", 0), /github api error: Not Found \(404\)/);
+});
+
+test("parseGithubResponse: response with message but no documentation_url → returns parsed (not error shape)", () => {
+  // e.g. a commit object has a commit.message field — but top-level message without documentation_url is not an error
+  const data = JSON.stringify({ message: "commit msg", sha: "abc" });
+  assert.deepEqual(parseGithubResponse(data, "", 0), { message: "commit msg", sha: "abc" });
 });
 
 test("sendBrief returns ok:true only when lark returns exit0 + ok:true", () => {
@@ -187,18 +218,39 @@ test("appendFailed appends to existing and survives corrupted file", () => {
   cleanup();
 });
 
+test("appendFailedRun writes {error, failed_at} with valid ISO", () => {
+  const { failedRunsFile, cleanup } = tmpStateDir();
+  appendFailedRun(new Error("boom"), failedRunsFile);
+  const arr = JSON.parse(readFileSync(failedRunsFile, "utf8"));
+  assert.equal(arr.length, 1);
+  assert.equal(arr[0].error, "boom");
+  assert.ok(!isNaN(Date.parse(arr[0].failed_at)), "failed_at is valid ISO");
+  cleanup();
+});
+
+test("appendFailedRun appends to existing and survives corrupted file", () => {
+  const { failedRunsFile, cleanup } = tmpStateDir();
+  appendFailedRun(new Error("e1"), failedRunsFile);
+  writeFileSync(failedRunsFile, "{not valid json", "utf8"); // corrupt it
+  appendFailedRun(new Error("e2"), failedRunsFile);
+  const arr = JSON.parse(readFileSync(failedRunsFile, "utf8"));
+  assert.equal(arr.length, 1); // corrupted reset to [], then 1 appended
+  assert.equal(arr[0].error, "e2");
+  cleanup();
+});
+
 test("fetchBriefContent: daily brief success returns decoded content", () => {
   const body = "# Brief\n\nhello world";
   const b64 = Buffer.from(body, "utf8").toString("base64");
-  setGhRunner(makeGhMock(() => b64));
+  setCurlRunner(makeCurlMock(() => ({ content: b64 })));
   const { content, inferredPath } = fetchBriefContent({ kind: "daily brief", sha: "s1", date: "2026-06-30T00:00:00Z" });
   assert.equal(content, body);
   assert.equal(inferredPath, "00_Inbox/brief-2026-06-30.md");
   resetRunners();
 });
 
-test("fetchBriefContent: daily brief gh failure returns null content (no throw)", () => {
-  setGhRunner(makeGhMock(() => { throw new Error("404"); }));
+test("fetchBriefContent: daily brief curl failure returns null content (no throw)", () => {
+  setCurlRunner(makeCurlMock(() => { throw new Error("404"); }));
   const { content } = fetchBriefContent({ kind: "daily brief", sha: "s1", date: "2026-06-30T00:00:00Z" });
   assert.equal(content, null);
   resetRunners();
@@ -208,9 +260,10 @@ test("fetchBriefContent: weekly synthesis finds weekly file via tree", () => {
   const body = "# Weekly\n\nsynthesis";
   const b64 = Buffer.from(body, "utf8").toString("base64");
   let call = 0;
-  setGhRunner(makeGhMock(() => {
+  setCurlRunner(makeCurlMock((urlPath) => {
     call++;
-    return call === 1 ? "10_Daily/weekly-W26-2026-06-28.md" : b64;
+    if (urlPath.includes("git/trees")) return { tree: [{ path: "10_Daily/weekly-W26-2026-06-28.md" }] };
+    return { content: b64 };
   }));
   const { content, inferredPath } = fetchBriefContent({ kind: "weekly synthesis", sha: "s1", date: "2026-06-28T00:00:00Z" });
   assert.equal(content, body);
@@ -219,7 +272,7 @@ test("fetchBriefContent: weekly synthesis finds weekly file via tree", () => {
 });
 
 test("fetchBriefContent: weekly empty tree returns null content", () => {
-  setGhRunner(makeGhMock(() => ""));
+  setCurlRunner(makeCurlMock(() => ({ tree: [] })));
   const { content } = fetchBriefContent({ kind: "weekly synthesis", sha: "s1", date: "2026-06-28T00:00:00Z" });
   assert.equal(content, null);
   resetRunners();
@@ -228,7 +281,7 @@ test("fetchBriefContent: weekly empty tree returns null content", () => {
 test("processCandidate: --force bypasses pushed-skip and pushes on ok:true", () => {
   const { stateFile, failedFile, cleanup } = tmpStateDir();
   const pushed = { s1: "daily brief" }; // already pushed
-  setGhRunner(makeGhMock(() => Buffer.from("body", "utf8").toString("base64")));
+  setCurlRunner(makeCurlMock(() => ({ content: Buffer.from("body", "utf8").toString("base64") })));
   setLarkRunner(makeLarkMock(() => ({ status: 0, stdout: okJson(), stderr: "" })));
   const r = processCandidate(
     { kind: "daily brief", sha: "s1", date: "2026-06-30T00:00:00Z" },
@@ -243,14 +296,14 @@ test("processCandidate: --force bypasses pushed-skip and pushes on ok:true", () 
 test("processCandidate: non-force skips already-pushed candidate", () => {
   const { stateFile, failedFile, cleanup } = tmpStateDir();
   const pushed = { s1: "daily brief" };
-  let ghCalled = false, larkCalled = false;
-  setGhRunner(makeGhMock(() => { ghCalled = true; return ""; }));
+  let curlCalled = false, larkCalled = false;
+  setCurlRunner(makeCurlMock(() => { curlCalled = true; return {}; }));
   setLarkRunner(makeLarkMock(() => { larkCalled = true; return { status: 0, stdout: okJson(), stderr: "" }; }));
   const r = processCandidate(
     { kind: "daily brief", sha: "s1", date: "2026-06-30T00:00:00Z" },
     { dryRun: false, force: false, pushed, stateFile, failedFile, sendAttempts: 1, sendWaitMs: 1 });
   assert.equal(r.skipped, true);
-  assert.equal(ghCalled, false);
+  assert.equal(curlCalled, false);
   assert.equal(larkCalled, false);
   resetRunners();
   cleanup();
@@ -258,7 +311,7 @@ test("processCandidate: non-force skips already-pushed candidate", () => {
 
 test("processCandidate: dry-run does not send and does not record", () => {
   const { stateFile, failedFile, cleanup } = tmpStateDir();
-  setGhRunner(makeGhMock(() => Buffer.from("body", "utf8").toString("base64")));
+  setCurlRunner(makeCurlMock(() => ({ content: Buffer.from("body", "utf8").toString("base64") })));
   let larkCalled = false;
   setLarkRunner(makeLarkMock(() => { larkCalled = true; return { status: 0, stdout: okJson(), stderr: "" }; }));
   const r = processCandidate(
@@ -275,7 +328,7 @@ test("processCandidate: dry-run does not send and does not record", () => {
 test("processCandidate: send failure records to failed-commits.json", () => {
   const { stateFile, failedFile, cleanup } = tmpStateDir();
   setRetryWait(1);
-  setGhRunner(makeGhMock(() => Buffer.from("body", "utf8").toString("base64")));
+  setCurlRunner(makeCurlMock(() => ({ content: Buffer.from("body", "utf8").toString("base64") })));
   setLarkRunner(makeLarkMock(() => ({ status: 1, stdout: "", stderr: "boom" })));
   const r = processCandidate(
     { kind: "daily brief", sha: "s9", date: "2026-06-30T00:00:00Z" },
@@ -291,7 +344,7 @@ test("processCandidate: send failure records to failed-commits.json", () => {
 
 test("processCandidate: no-content fetch skips (no send, no record)", () => {
   const { stateFile, failedFile, cleanup } = tmpStateDir();
-  setGhRunner(makeGhMock(() => { throw new Error("404"); }));
+  setCurlRunner(makeCurlMock(() => { throw new Error("404"); }));
   let larkCalled = false;
   setLarkRunner(makeLarkMock(() => { larkCalled = true; return { status: 0, stdout: okJson(), stderr: "" }; }));
   const r = processCandidate(
@@ -311,8 +364,7 @@ test("sleepSync returns without throwing for small ms", () => {
 });
 
 test("runPipeline: empty commits listing → { code:0, nothing:true }", async () => {
-  setRetryWait(1);
-  setGhRunner(makeGhMock(() => ""));
+  setCurlRunner(makeCurlMock(() => []));
   const { stateFile, failedFile, cleanup } = tmpStateDir();
   const r = await runPipeline({ argv: [], stateFile, failedFile });
   assert.equal(r.code, 0);
@@ -321,29 +373,25 @@ test("runPipeline: empty commits listing → { code:0, nothing:true }", async ()
   cleanup();
 });
 
-test("runPipeline: gh listing all-fail → { code:1, fatal } (no process.exit)", async () => {
-  setRetryWait(1);
-  setGhRunner(makeGhMock(() => { throw new Error("tls timeout"); }));
+test("runPipeline: curl listing all-fail → throws (no process.exit, no state write)", async () => {
+  setCurlRunner(makeCurlMock(() => { throw new Error("tls timeout"); }));
   const { stateFile, failedFile, cleanup } = tmpStateDir();
-  const r = await runPipeline({ argv: [], stateFile, failedFile });
-  assert.equal(r.code, 1);
-  assert.ok(r.fatal.includes("tls timeout"));
+  await assert.rejects(() => runPipeline({ argv: [], stateFile, failedFile }), /tls timeout/);
   resetRunners();
   cleanup();
 });
 
 test("runPipeline: normal flow processes candidates end-to-end with mocks", async () => {
-  setRetryWait(1);
-  const commits = [
-    { sha: "c1", kind: "daily brief", msg: "chore: daily brief 2026-06-30", date: "2026-06-30T00:00:00Z" },
-    { sha: "c2", kind: "weekly synthesis", msg: "chore: weekly synthesis 2026-06-28", date: "2026-06-28T00:00:00Z" },
+  const rawCommits = [
+    rawCommit("c1", "chore: daily brief 2026-06-30", "2026-06-30T00:00:00Z"),
+    rawCommit("c2", "chore: weekly synthesis 2026-06-28", "2026-06-28T00:00:00Z"),
   ];
   const b64daily = Buffer.from("---\nx:1\n---\n# Daily body", "utf8").toString("base64");
-  setGhRunner((argv) => {
-    if (argv.some((a) => typeof a === "string" && a.includes("commits?per_page"))) return commits.map((c) => JSON.stringify(c)).join("\n");
-    if (argv.some((a) => typeof a === "string" && a.includes("git/trees"))) return "10_Daily/weekly-W26-2026-06-28.md";
-    if (argv.some((a) => typeof a === "string" && a.includes("contents"))) return b64daily;
-    return "";
+  setCurlRunner((urlPath) => {
+    if (urlPath.includes("commits?per_page")) return rawCommits;
+    if (urlPath.includes("git/trees")) return { tree: [{ path: "10_Daily/weekly-W26-2026-06-28.md" }] };
+    if (urlPath.includes("contents")) return { content: b64daily };
+    return {};
   });
   setLarkRunner(makeLarkMock(() => ({ status: 0, stdout: okJson(), stderr: "" })));
   const { stateFile, failedFile, cleanup } = tmpStateDir();
@@ -358,12 +406,11 @@ test("runPipeline: normal flow processes candidates end-to-end with mocks", asyn
 });
 
 test("runPipeline: --dry-run produces dry results, no send, no state write", async () => {
-  setRetryWait(1);
-  const commits = [{ sha: "c1", kind: "daily brief", msg: "chore: daily brief", date: "2026-06-30T00:00:00Z" }];
-  setGhRunner((argv) => {
-    if (argv.some((a) => typeof a === "string" && a.includes("commits?per_page"))) return JSON.stringify(commits[0]);
-    if (argv.some((a) => typeof a === "string" && a.includes("contents"))) return Buffer.from("body", "utf8").toString("base64");
-    return "";
+  const rawCommits = [rawCommit("c1", "chore: daily brief 2026-06-30", "2026-06-30T00:00:00Z")];
+  setCurlRunner((urlPath) => {
+    if (urlPath.includes("commits?per_page")) return rawCommits;
+    if (urlPath.includes("contents")) return { content: Buffer.from("body", "utf8").toString("base64") };
+    return {};
   });
   let larkCalled = false;
   setLarkRunner(() => { larkCalled = true; return { status: 0, stdout: okJson(), stderr: "" }; });
@@ -376,40 +423,144 @@ test("runPipeline: --dry-run produces dry results, no send, no state write", asy
   cleanup();
 });
 
+test("runPipeline: filters out non-brief commits", async () => {
+  const rawCommits = [
+    rawCommit("c1", "fix: typo in readme", "2026-06-30T00:00:00Z"),
+    rawCommit("c2", "chore: daily brief 2026-06-30", "2026-06-30T00:00:00Z"),
+    rawCommit("c3", "feat: new feature", "2026-06-29T00:00:00Z"),
+  ];
+  setCurlRunner((urlPath) => {
+    if (urlPath.includes("commits?per_page")) return rawCommits;
+    return {};
+  });
+  const { stateFile, failedFile, cleanup } = tmpStateDir();
+  const r = await runPipeline({ argv: ["--dry-run", "--force"], stateFile, failedFile });
+  assert.equal(r.code, 0);
+  assert.equal(r.results.length, 1); // only c2 matches
+  resetRunners();
+  cleanup();
+});
+
+test("runPipeline: backfill scenario — date parsed from commit message, not commit timestamp", async () => {
+  // 4 backfill commits all made TODAY, but message dates are 7/4-7/7.
+  // Script must use message date (not commit date) to derive brief file path.
+  const rawCommits = [
+    rawCommit("bk1", "chore: daily brief 2026-07-04", "2026-07-07T07:00:00Z"),
+    rawCommit("bk2", "chore: daily brief 2026-07-05", "2026-07-07T07:01:00Z"),
+    rawCommit("bk3", "chore: daily brief 2026-07-06", "2026-07-07T07:02:00Z"),
+    rawCommit("bk4", "chore: daily brief 2026-07-07", "2026-07-07T07:03:00Z"),
+  ];
+  let fetchedPaths = [];
+  setCurlRunner((urlPath) => {
+    if (urlPath.includes("commits?per_page")) return rawCommits;
+    if (urlPath.includes("contents")) {
+      const m = urlPath.match(/brief-(\d{4}-\d{2}-\d{2})/);
+      if (m) fetchedPaths.push(m[1]);
+      return { content: Buffer.from(`# Brief ${m ? m[1] : "?"}`, "utf8").toString("base64") };
+    }
+    return {};
+  });
+  setLarkRunner(makeLarkMock(() => ({ status: 0, stdout: okJson(), stderr: "" })));
+  const { stateFile, failedFile, cleanup } = tmpStateDir();
+  const r = await runPipeline({ argv: ["--force"], stateFile, failedFile });
+  assert.equal(r.code, 0);
+  assert.equal(r.results.length, 4);
+  // Each brief fetched by its MESSAGE date, not commit date
+  assert.deepEqual(fetchedPaths.sort(), ["2026-07-04", "2026-07-05", "2026-07-06", "2026-07-07"]);
+  resetRunners();
+  cleanup();
+});
+
+test("runPipeline: accepts curlRunner/larkRunner/retryWait via opts", async () => {
+  const rawCommits = [rawCommit("c1", "chore: daily brief 2026-06-30", "2026-06-30T00:00:00Z")];
+  const { stateFile, failedFile, cleanup } = tmpStateDir();
+  const r = await runPipeline({
+    argv: ["--dry-run", "--force"],
+    stateFile, failedFile,
+    curlRunner: (urlPath) => {
+      if (urlPath.includes("commits?per_page")) return rawCommits;
+      if (urlPath.includes("contents")) return { content: Buffer.from("body", "utf8").toString("base64") };
+      return {};
+    },
+    larkRunner: () => { throw new Error("should not be called in dry-run"); },
+    retryWait: 1,
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.results[0].dry, true);
+  resetRunners();
+  cleanup();
+});
+
+test("runMain: pipeline success → returns pipeline result, no failed-runs.json", async () => {
+  setCurlRunner(() => []);
+  const { stateFile, failedFile, failedRunsFile, cleanup } = tmpStateDir();
+  const r = await runMain({ argv: [], stateFile, failedFile, failedRunsFile });
+  assert.equal(r.code, 0);
+  assert.equal(r.nothing, true);
+  assert.ok(!existsSync(failedRunsFile));
+  resetRunners();
+  cleanup();
+});
+
+test("runMain: pipeline failure → logs to failed-runs.json + {code:0, logged:true}", async () => {
+  setCurlRunner(() => { throw new Error("tls timeout"); });
+  const { stateFile, failedFile, failedRunsFile, cleanup } = tmpStateDir();
+  const r = await runMain({ argv: [], stateFile, failedFile, failedRunsFile });
+  assert.equal(r.code, 0);
+  assert.equal(r.logged, true);
+  assert.ok(r.error.includes("tls timeout"));
+  assert.ok(existsSync(failedRunsFile));
+  const arr = JSON.parse(readFileSync(failedRunsFile, "utf8"));
+  assert.equal(arr.length, 1);
+  assert.ok(arr[0].error.includes("tls timeout"));
+  assert.ok(!isNaN(Date.parse(arr[0].failed_at)), "failed_at valid ISO");
+  resetRunners();
+  cleanup();
+});
+
+test("runMain: pipeline failure with corrupted failed-runs.json → still logs + exit 0", async () => {
+  setCurlRunner(() => { throw new Error("tls timeout 2"); });
+  const { stateFile, failedFile, failedRunsFile, cleanup } = tmpStateDir();
+  writeFileSync(failedRunsFile, "{corrupted", "utf8");
+  const r = await runMain({ argv: [], stateFile, failedFile, failedRunsFile });
+  assert.equal(r.code, 0);
+  assert.equal(r.logged, true);
+  const arr = JSON.parse(readFileSync(failedRunsFile, "utf8"));
+  assert.equal(arr.length, 1); // corrupted reset, then 1 appended
+  assert.ok(arr[0].error.includes("tls timeout 2"));
+  resetRunners();
+  cleanup();
+});
+
 // ============================ FUZZ ROUND 1 ============================
-// Variable commit lists + variable gh behavior. Invariants:
-//   - ghWithRetry attempts never exceed GH_MAX_ATTEMPTS
-//   - all-gh-fail → fetchBriefContent returns null (no throw)
+// Variable commit lists + variable curl behavior. Invariants:
+//   - curlGithub propagates curlRunner outcome (no JS retry)
+//   - all-curl-fail → fetchBriefContent returns null (no throw)
 //   - success path returns decoded content
 
-test("FUZZ ROUND 1 (seed 1): variable commit lists + gh outcomes respect retry cap", () => {
-  setRetryWait(1);
+test("FUZZ ROUND 1 (seed 1): variable commit lists + curl outcomes", () => {
   const rng = mulberry32(1);
   const kinds = ["daily brief", "weekly synthesis"];
-  let sawAllFail = 0, sawSuccess = 0, sawWeekly = 0, sawTransientRecover = 0, sawCapHit = 0, sawNoRecordOnFail = 0;
+  let sawAllFail = 0, sawSuccess = 0, sawWeekly = 0, sawNoRecordOnFail = 0, sawCurlThrow = 0;
 
-  // Part A — ghWithRetry directly with variable transient behavior (ISC-13, ISC-14)
+  // Part A — curlGithub propagates curlRunner outcome (no JS retry)
   for (let i = 0; i < 40; i++) {
-    const succeedAt = rand(rng, 1, 4); // 4 = never (all fail)
-    const gh = makeGhMock((_a, n) => {
-      if (n >= succeedAt) return "ok-" + i;
-      throw new Error("transient " + n);
+    const succeeds = rng() > 0.3;
+    setCurlRunner(() => {
+      if (succeeds) return { ok: true, i };
+      throw new Error("transient " + i);
     });
-    setGhRunner(gh);
-    if (succeedAt > GH_MAX_ATTEMPTS) {
-      assert.throws(() => ghWithRetry("api", "x"), /transient/);
-      assert.equal(gh.attempts(), GH_MAX_ATTEMPTS);
-      sawCapHit++;
+    if (succeeds) {
+      const r = curlGithub("/test");
+      assert.equal(r.i, i);
+      sawSuccess++;
     } else {
-      assert.equal(ghWithRetry("api", "x"), "ok-" + i);
-      assert.ok(gh.attempts() <= GH_MAX_ATTEMPTS, `attempt ${gh.attempts()} > cap`);
-      assert.equal(gh.attempts(), succeedAt);
-      if (succeedAt > 1) sawTransientRecover++;
-      else sawSuccess++;
+      assert.throws(() => curlGithub("/test"), /transient/);
+      sawCurlThrow++;
     }
   }
 
-  // Part B — fetchBriefContent + processCandidate with variable commit lists (ISC-12, ISC-15, ISC-24)
+  // Part B — fetchBriefContent + processCandidate with variable commit lists
   for (let i = 0; i < 40; i++) {
     const count = rand(rng, 0, 4);
     for (let j = 0; j < count; j++) {
@@ -417,24 +568,24 @@ test("FUZZ ROUND 1 (seed 1): variable commit lists + gh outcomes respect retry c
       if (kind === "weekly synthesis") sawWeekly++;
       const sha = "s" + rand(rng, 1000, 9999);
       const date = `2026-0${rand(rng, 1, 9)}-${String(rand(rng, 1, 28)).padStart(2, "0")}T00:00:00Z`;
-      const succeedAt = rand(rng, 1, 4);
+      const succeeds = rng() > 0.3;
       const body = `# ${kind}\n\ncontent ${i}.${j}`;
       const b64 = Buffer.from(body, "utf8").toString("base64");
-      setGhRunner((argv) => {
-        const isTree = argv.some((a) => typeof a === "string" && a.includes("git/trees"));
-        const isContents = argv.some((a) => typeof a === "string" && a.includes("contents"));
-        if (isTree) return "10_Daily/weekly-W26-2026-06-28.md";
+      setCurlRunner((urlPath) => {
+        const isTree = urlPath.includes("git/trees");
+        const isContents = urlPath.includes("contents");
+        if (isTree) return { tree: [{ path: "10_Daily/weekly-W26-2026-06-28.md" }] };
         if (isContents) {
-          if (succeedAt <= GH_MAX_ATTEMPTS) return b64;
+          if (succeeds) return { content: b64 };
           throw new Error("transient contents");
         }
-        return "[]";
+        return [];
       });
       const { content } = fetchBriefContent({ kind, sha, date });
-      if (succeedAt > GH_MAX_ATTEMPTS) {
+      if (!succeeds) {
         assert.equal(content, null);
         sawAllFail++;
-        // ISC-15: all-gh-fail through processCandidate → no markPushed, no throw
+        // ISC-15: all-curl-fail through processCandidate → no markPushed, no throw
         const { stateFile, failedFile, cleanup } = tmpStateDir();
         setLarkRunner(() => { throw new Error("should not send"); });
         const r = processCandidate(
@@ -444,7 +595,6 @@ test("FUZZ ROUND 1 (seed 1): variable commit lists + gh outcomes respect retry c
         assert.ok(!existsSync(stateFile) || Object.keys(loadPushed(stateFile)).length === 0, "no markPushed on all-fail");
         sawNoRecordOnFail++;
         resetRunners();
-        setRetryWait(1);
         cleanup();
       } else {
         assert.equal(content, body);
@@ -452,11 +602,10 @@ test("FUZZ ROUND 1 (seed 1): variable commit lists + gh outcomes respect retry c
       }
     }
   }
-  assert.ok(sawAllFail > 0, "round 1 must exercise all-gh-fail path");
-  assert.ok(sawSuccess > 0, "round 1 must exercise gh-success path");
+  assert.ok(sawAllFail > 0, "round 1 must exercise all-curl-fail path");
+  assert.ok(sawSuccess > 0, "round 1 must exercise curl-success path");
   assert.ok(sawWeekly > 0, "round 1 must exercise weekly synthesis branch");
-  assert.ok(sawTransientRecover > 0, "round 1 must exercise transient-fail-then-success");
-  assert.ok(sawCapHit > 0, "round 1 must hit retry cap (all-fail at 3)");
+  assert.ok(sawCurlThrow > 0, "round 1 must exercise curlGithub throw propagation");
   assert.ok(sawNoRecordOnFail > 0, "round 1 must assert no-record on all-fail");
   resetRunners();
 });
@@ -497,7 +646,10 @@ test("FUZZ ROUND 2 (seed 2): variable lark outcomes + state respect invariants",
         if (mode === 3) return { status: 0, stdout: "garbage", stderr: "" };
         return sendAttempts >= 2 ? { status: 0, stdout: okJson(), stderr: "" } : { status: 0, stdout: failJson(), stderr: "" };
       });
-      setGhRunner(makeGhMock(() => Buffer.from("body", "utf8").toString("base64")));
+      setCurlRunner((urlPath) => {
+        if (urlPath.includes("git/trees")) return { tree: [{ path: "10_Daily/weekly-W26-2026-06-28.md" }] };
+        return { content: Buffer.from("body", "utf8").toString("base64") };
+      });
       const r = processCandidate(
         { kind, sha, date },
         { dryRun: false, force: true, pushed: loadPushed(stateFile), stateFile, failedFile, sendAttempts: SEND_MAX_ATTEMPTS, sendWaitMs: 1 });

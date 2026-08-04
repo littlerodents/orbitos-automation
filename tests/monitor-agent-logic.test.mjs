@@ -268,10 +268,33 @@ test("saveSeenIds: writes to GitHub", async () => {
   resetRunners();
 });
 
-test("saveSeenIds: error → silent", async () => {
+test("saveSeenIds: error → logged and swallowed (does not throw)", async () => {
   setGhCaller(async () => { throw new Error("fail"); });
   setStateVars(VARS);
-  await saveSeenIds(["1"]);
+  // 行为契约：写失败打日志吞掉、不抛（防状态写挂掉主流程），但绝不能静默 —— 见 logic.mjs 注释
+  await assert.doesNotReject(() => saveSeenIds(["1"]));
+  resetRunners();
+});
+
+test("buildSummaryEntry: empty tweet content → null (no LLM call, no garbage entry)", async () => {
+  setTweetContentGetter(async () => null);
+  let called = false;
+  setDeepSeekCaller(async () => { called = true; return {}; });
+  setStateVars(VARS);
+  const tweet = makeTweet({ author: "@addyosmani" });
+  tweet.text = ""; // makeTweet 的 || 默认值会吃掉空串，必须显式覆盖
+  const entry = await buildSummaryEntry(tweet, "baseline");
+  assert.equal(entry, null);
+  assert.equal(called, false);
+  resetRunners();
+});
+
+test("buildSummaryEntry: '无法判断增量' → null (2026-08-04 vault 实证垃圾 entry 的防线)", async () => {
+  setTweetContentGetter(async () => "some content");
+  setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"title":"","summary":"","increment":"推文内容缺失，无法判断增量。"}' } }] }));
+  setStateVars(VARS);
+  const entry = await buildSummaryEntry(makeTweet({ author: "@x" }), "baseline");
+  assert.equal(entry, null);
   resetRunners();
 });
 
@@ -344,14 +367,13 @@ test("processMonitorTask: empty timeline → write no content", async () => {
   resetRunners();
 });
 
-test("processMonitorTask: timeline error → write no content", async () => {
+test("processMonitorTask: timeline error → throws (fail loud, no fake empty digest)", async () => {
   setTimelineGetter(async () => { throw new Error("fail"); });
   setGhCaller(async () => null);
   setDeepSeekCaller(async () => ({}));
   setStateVars(VARS);
-  const r = await processMonitorTask();
-  assert.equal(r.action, "write");
-  assert.equal(r.entries, 0);
+  // 2026-08-04 twin-review 修复：拉取失败必须抛错，不许写成"今日无内容"的假 digest
+  await assert.rejects(() => processMonitorTask(), /fail/);
   resetRunners();
 });
 
