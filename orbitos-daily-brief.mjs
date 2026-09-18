@@ -35,12 +35,19 @@ function actionsFromTracker() {
     const d = larkJson(["base", "+record-list", "--base-token", T.base_token, "--table-id", T.action_table]);
     if (!d) return [];
     const cols = d.fields || [];
-    const ai = cols.indexOf("行动"), si = cols.indexOf("状态"), gi = cols.indexOf("卡龄天数");
-    return (d.data || []).map(vals => ({
-      text: (Array.isArray(vals[ai]) ? vals[ai][0] : vals[ai]) || "",
-      status: (Array.isArray(vals[si]) ? vals[si][0] : vals[si]) || "未动",
-      age: Number(vals[gi]) || 0,
-    }));
+    const ai = cols.indexOf("行动"), si = cols.indexOf("状态"), di = cols.indexOf("开始卡于");
+    const todayMs = Date.now() + 8 * 3600e3;
+    return (d.data || []).map(vals => {
+      const start = String((Array.isArray(vals[di]) ? vals[di][0] : vals[di]) || "").slice(0, 10);
+      const startMs = start ? new Date(`${start}T00:00:00+08:00`).getTime() : todayMs;
+      const age = Math.max(0, Math.floor((todayMs - startMs) / 86400e3));
+      return {
+        text: (Array.isArray(vals[ai]) ? vals[ai][0] : vals[ai]) || "",
+        status: (Array.isArray(vals[si]) ? vals[si][0] : vals[si]) || "未动",
+        start,
+        age,
+      };
+    });
   } catch { return []; }
 }
 
@@ -105,7 +112,7 @@ function gatherInputs() {
     .sort((a, b) => b.age - a.age);
   const doneN = actionsFromTracker().filter(a => a.status === "已完成").length;
   const actionLines = actions.slice(0, 8)
-    .map(a => `- [${a.status}·卡龄${a.age}天] ${a.text}`)
+    .map(a => `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天] ${a.text}`)
     .join("\n");
 
   // 4. 活跃项目名
