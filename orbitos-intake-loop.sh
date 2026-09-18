@@ -6,6 +6,9 @@ export LARK_CLI_NO_PROXY=1
 
 SCRIPT="/Users/evander/codex/orbitos-automation/orbitos-intake-base.mjs"
 LOG="/Users/evander/codex/orbitos-automation/orbitos-intake-loop.log"
+SCRIPT_DIR="${SCRIPT:h}"
+
+cd "$SCRIPT_DIR" || exit 1
 
 timestamp() {
   date "+%Y-%m-%d %H:%M:%S %Z"
@@ -17,9 +20,13 @@ timestamp() {
   views_exit=$?
   /usr/local/bin/node "$SCRIPT" sync-vault
   sync_exit=$?
-  /usr/local/bin/node "$SCRIPT" promote
+  /usr/local/bin/node "$SCRIPT" promote --no-git
   promote_exit=$?
   printf "[%s] launch: OrbitOS intake loop exit views=%s sync=%s promote=%s\n" "$(timestamp)" "$views_exit" "$sync_exit" "$promote_exit"
 } >> "$LOG" 2>&1
+
+if (( views_exit != 0 || sync_exit != 0 || promote_exit != 0 )); then
+  exit 1
+fi
 
 exit 0

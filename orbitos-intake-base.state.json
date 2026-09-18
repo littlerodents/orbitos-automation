@@ -1,10 +1,10 @@
 {
-  "lastRunAt": "2026-07-04T17:42:01.455Z",
-  "lastRunAction": "promote",
+  "lastRunAt": "2026-09-18T04:06:02.604Z",
+  "lastRunAction": "ensure-schema",
   "lastRunOk": true,
   "lastErrorAt": null,
   "lastErrorAction": null,
   "lastError": null,
-  "lastSuccessAt": "2026-07-04T17:42:01.455Z",
-  "lastSuccessAction": "promote"
+  "lastSuccessAt": "2026-09-18T04:06:02.604Z",
+  "lastSuccessAction": "ensure-schema"
 }

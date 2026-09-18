@@ -21,6 +21,7 @@ const rand = (rng, min, max) => Math.floor(rng() * (max - min + 1)) + min;
 const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
 
 const VARS = { OWNER: "test", REPO: "test", BRANCH: "main" };
+const FIXED_NOW = new Date("2026-07-03T12:00:00Z");
 
 function makeNote(name, opts = {}) {
   const content = `---\ntype: selected-content\nsource: researcher-agent\nconfidence: ${opts.confidence || "C3"}\ndate: 2026-07-02\ntopics: [${(opts.topics || ["AI"]).map(t => JSON.stringify(t)).join(", ")}]\n---\n\n# ${opts.title || name}\n\n${opts.body || "some content"}`;
@@ -37,6 +38,10 @@ test("isRecentFile: within 3 days", () => {
 test("isRecentFile: older than 3 days", () => {
   const now = new Date("2026-07-02T12:00:00Z");
   assert.equal(isRecentFile("researcher-2026-06-28-test.md", 3, now), false);
+});
+test("isRecentFile: future dates are not recent", () => {
+  const now = new Date("2026-07-02T12:00:00Z");
+  assert.equal(isRecentFile("researcher-2026-07-04-test.md", 3, now), false);
 });
 test("isRecentFile: no date", () => { assert.equal(isRecentFile("test.md", 3), false); });
 test("extractNoteTitle: from H1", () => { assert.equal(extractNoteTitle("# My Title\ncontent"), "My Title"); });
@@ -97,7 +102,7 @@ test("shouldWriteAnalystNote: null", () => {
 test("readSelectedNotes: empty dir", async () => {
   setGhCaller(async () => []);
   setStateVars(VARS);
-  assert.equal((await readSelectedNotes(3)).length, 0);
+  assert.equal((await readSelectedNotes(3, FIXED_NOW)).length, 0);
   resetRunners();
 });
 test("readSelectedNotes: with files", async () => {
@@ -111,7 +116,7 @@ test("readSelectedNotes: with files", async () => {
     return null;
   });
   setStateVars(VARS);
-  const notes = await readSelectedNotes(3);
+  const notes = await readSelectedNotes(3, FIXED_NOW);
   assert.equal(notes.length, 1);
   assert.equal(notes[0].title, "Test");
   resetRunners();
@@ -122,13 +127,13 @@ test("readSelectedNotes: ghCaller error", async () => {
     throw new Error("network");
   });
   setStateVars(VARS);
-  assert.equal((await readSelectedNotes(3)).length, 0);
+  assert.equal((await readSelectedNotes(3, FIXED_NOW)).length, 0);
   resetRunners();
 });
 test("readSelectedNotes: null list", async () => {
   setGhCaller(async () => null);
   setStateVars(VARS);
-  assert.equal((await readSelectedNotes(3)).length, 0);
+  assert.equal((await readSelectedNotes(3, FIXED_NOW)).length, 0);
   resetRunners();
 });
 test("readProjectContext: with data", async () => {
@@ -207,7 +212,7 @@ test("processAnalystTask: no notes → no_action", async () => {
   setGhCaller(async () => []);
   setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"signposts":[],"noise":[]}' } }] }));
   setStateVars(VARS);
-  const r = await processAnalystTask();
+  const r = await processAnalystTask({ now: FIXED_NOW });
   assert.equal(r.no_action, true);
   resetRunners();
 });
@@ -220,7 +225,7 @@ test("processAnalystTask: has signposts → write", async () => {
   });
   setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"signposts":[{"direction":"Agent","strength":"弱（2篇）","evidence":["test"],"judgment":"方向明确","suggestion":""}],"noise":[],"topics":["AI"]}' } }] }));
   setStateVars(VARS);
-  const r = await processAnalystTask();
+  const r = await processAnalystTask({ now: FIXED_NOW });
   assert.equal(r.action, "write");
   assert.ok(r.analyst_path.includes("analyst-"));
   assert.equal(r.signposts, 1);
@@ -235,7 +240,7 @@ test("processAnalystTask: no signposts + ≤2 notes → no_action", async () => 
   });
   setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"signposts":[],"noise":[]}' } }] }));
   setStateVars(VARS);
-  const r = await processAnalystTask();
+  const r = await processAnalystTask({ now: FIXED_NOW });
   assert.equal(r.no_action, true);
   resetRunners();
 });
@@ -248,7 +253,7 @@ test("processAnalystTask: noise only + >2 notes → write", async () => {
   });
   setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"signposts":[],"noise":[{"note":"c","reason":"不相关"}],"topics":[]}' } }] }));
   setStateVars(VARS);
-  const r = await processAnalystTask();
+  const r = await processAnalystTask({ now: FIXED_NOW });
   assert.equal(r.action, "write");
   assert.equal(r.noise, 1);
   resetRunners();
@@ -279,7 +284,7 @@ test("FUZZ ROUND 1 (seed 1): variable notes + pattern invariants", async () => {
     const ns = rng() > 0.5 ? [{ note: "researcher-2026-07-02-n0", reason: "不相关" }] : [];
     setDeepSeekCaller(async () => ({ choices: [{ message: { content: JSON.stringify({ signposts: sp, noise: ns, topics: ["t"] }) } }] }));
     setStateVars(VARS);
-    const r = await processAnalystTask();
+    const r = await processAnalystTask({ now: FIXED_NOW });
     assert.ok(r.action === "write" || r.no_action === true);
     if (r.action === "write") sawWrite++; else sawNoAction++;
   }
@@ -319,7 +324,7 @@ test("FUZZ ROUND 2 (seed 2): variable DeepSeek responses", async () => {
       setDeepSeekCaller(async () => ({ choices: [{ message: { content: '{"signposts":[{"direction":"x"' } }] }));
     }
     setStateVars(VARS);
-    const r = await processAnalystTask();
+    const r = await processAnalystTask({ now: FIXED_NOW });
     assert.ok(r.action === "write" || r.no_action === true);
     if (r.action === "write") sawWrite++; else sawNoAction++;
   }

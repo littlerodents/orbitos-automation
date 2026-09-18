@@ -181,10 +181,9 @@ export async function readBrief(today) {
   return Buffer.from(file.content, "base64").toString("utf8");
 }
 
-export async function readResearcherNotes(today, hours) {
+export async function readResearcherNotes(today, hours, now = new Date(Date.now() + 8 * 3600 * 1000)) {
   const list = await ghGet("30_Research/Selected");
   if (!list || !Array.isArray(list)) return [];
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
   const recent = list.filter(f => f.name && f.name.startsWith("researcher-") && isRecentFile(f.name, hours || 24, now));
   const results = [];
   for (const f of recent) {
@@ -232,27 +231,26 @@ export async function readMonitorDigests(today) {
   return results.slice(0, 3);
 }
 
-export async function readFeishuFlags() {
+export async function readFeishuFlags(now = new Date(Date.now() + 8 * 3600 * 1000)) {
   const list = await ghGet("00_Inbox");
   if (!list || !Array.isArray(list)) return [];
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
   const recent = list.filter(f => f.name && f.name.startsWith("feishu-") && isRecentFile(f.name, 168, now));
   return extractFeishuFlags(recent);
 }
 
 // ============ Main pipeline ============
 
-export async function processTodayTask() {
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+export async function processTodayTask(opts = {}) {
+  const now = opts.now || new Date(Date.now() + 8 * 3600 * 1000);
   const today = now.toISOString().slice(0, 10);
 
   const briefContent = await readBrief(today);
   const tldr = extractTldr(briefContent);
-  const researcher = await readResearcherNotes(today, 24);
+  const researcher = await readResearcherNotes(today, 24, now);
   const analyst = await readAnalystNote(today);
   const filter = await readFilterDigests(today);
   const monitor = await readMonitorDigests(today);
-  const feishuFlags = await readFeishuFlags();
+  const feishuFlags = await readFeishuFlags(now);
 
   const md = buildTodayMd({ date: today, tldr, researcher, analyst, filter, monitor, feishuFlags });
   const mdB64 = Buffer.from(md, "utf8").toString("base64");
