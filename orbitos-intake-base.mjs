@@ -12,20 +12,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
 const _cfg = loadConfig();
 
-import { fileURLToPath } from "node:url";
-
 const VAULT = _cfg.vault_path;
-const ROOT = process.cwd();
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(ROOT, "orbitos-intake-base.config.json");
 const STATE_PATH = path.join(ROOT, "orbitos-intake-base.state.json");
 const LARK_CLI = _cfg.lark_cli_path;
 const TIME_ZONE = "Asia/Shanghai";
 const DEFAULT_CALIBRATION_UNTIL = "2026-05-31";
 const MAX_SELECTED_TOPICS = 3;
+const DERIVATION_VERSION = 2;
 
 const FIELD = {
   title: "标题",
@@ -36,6 +37,7 @@ const FIELD = {
   status: "状态",
   liked: "我喜欢的内容",
   promote: "进入 Obsidian",
+  sourcePath: "源文件路径",
   obsidianPath: "Obsidian 路径",
   url: "URL",
   author: "作者",
@@ -48,6 +50,8 @@ const FIELD = {
   summary: "摘要",
   raw: "原文",
   hash: "Hash",
+  weeklyEligible: "周视图有效",
+  derivationVersion: "派生版本",
   lastSync: "最后同步",
 };
 
@@ -92,8 +96,11 @@ function log(message) {
 function usage() {
   process.stdout.write(`Usage:
 	  orbitos-intake-base.mjs init --base-token <token> [--base-url <url>]
+	  orbitos-intake-base.mjs ensure-schema [--dry-run]
 	  orbitos-intake-base.mjs configure-views [--dry-run] [--today YYYY-MM-DD]
 	  orbitos-intake-base.mjs sync-vault [--dry-run]
+	  orbitos-intake-base.mjs refresh-derived [--dry-run]
+	  orbitos-intake-base.mjs reconcile-records [--dry-run]
 	  orbitos-intake-base.mjs promote [--dry-run] [--no-git]
 	  orbitos-intake-base.mjs status
 
@@ -130,7 +137,7 @@ function sleepMs(ms) {
 }
 
 function isTransientLarkError(error) {
-  return /TLS handshake timeout|timeout awaiting response|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|temporarily unavailable|network/i.test(String(error?.message || error || ""));
+  return /TLS handshake timeout|timeout awaiting response|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|temporarily unavailable|network|1254291|write conflict/i.test(String(error?.message || error || ""));
 }
 
 function runLarkCli(argv, { attempts = 2 } = {}) {
@@ -154,7 +161,7 @@ function runLarkCliOnce(argv) {
 	    timeout: 60_000,
 	    env: {
       ...process.env,
-      PATH: `/usr/local/bin:/opt/homebrew/bin:${require("node:os").homedir()}/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
+      PATH: `/usr/local/bin:/opt/homebrew/bin:${homedir()}/.npm-global/bin:${process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin"}`,
       LARK_CLI_NO_PROXY: "1",
     },
     maxBuffer: 50 * 1024 * 1024,
@@ -254,6 +261,7 @@ function tableFields() {
     selectField(FIELD.status, SELECTS.status),
     selectField(FIELD.liked, SELECTS.liked),
     { name: FIELD.promote, type: "checkbox" },
+    { name: FIELD.sourcePath, type: "text", description: "Source Markdown path; separate from the promoted note path" },
     { name: FIELD.obsidianPath, type: "text" },
     { name: FIELD.url, type: "text", style: { type: "url" } },
     { name: FIELD.author, type: "text" },
@@ -266,8 +274,50 @@ function tableFields() {
     { name: FIELD.summary, type: "text" },
     { name: FIELD.raw, type: "text" },
     { name: FIELD.hash, type: "text" },
+    { name: FIELD.weeklyEligible, type: "checkbox" },
+    { name: FIELD.derivationVersion, type: "number" },
     { name: FIELD.lastSync, type: "datetime", style: { format: "yyyy-MM-dd HH:mm" } },
   ];
+}
+
+function normalizeFieldListResponse(response) {
+  const fields = response?.data?.fields || response?.data?.items || response?.fields || response?.items;
+  return Array.isArray(fields) ? fields : [];
+}
+
+function ensureSchema(config = readConfig(), { dryRun = false } = {}) {
+  const response = runLarkCli([
+    "base",
+    "+field-list",
+    "--as",
+    "user",
+    "--base-token",
+    config.baseToken,
+    "--table-id",
+    config.tableId,
+    "--limit",
+    "200",
+  ]);
+  const existingNames = new Set(normalizeFieldListResponse(response).map((field) => field.name));
+  const missing = tableFields().filter((field) => !existingNames.has(field.name));
+  for (const field of missing) {
+    if (dryRun) continue;
+    runLarkCli([
+      "base",
+      "+field-create",
+      "--as",
+      "user",
+      "--base-token",
+      config.baseToken,
+      "--table-id",
+      config.tableId,
+      "--json",
+      JSON.stringify(field),
+    ]);
+  }
+  log(`ensure-schema: existing=${existingNames.size}; created=${dryRun ? 0 : missing.length}; missing=${missing.map((field) => field.name).join(",") || "none"}; dry_run=${dryRun}`);
+  if (!dryRun) markSuccess("ensure-schema");
+  return missing.map((field) => field.name);
 }
 
 function localDate(date = new Date()) {
@@ -278,12 +328,38 @@ function readwiseInMainView(config = {}, today = localDate()) {
   return String(today) <= String(config.calibrationUntil || DEFAULT_CALIBRATION_UNTIL);
 }
 
+function shiftDate(dateString, days) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 function viewDefinitions(config = {}, today = localDate()) {
   const mainSources = readwiseInMainView(config, today) ? ["YouMind", "Readwise"] : ["YouMind"];
   return [
     {
+      name: "00 当前可读",
+      aliases: ["Grid View"],
+      filter: {
+        logic: "and",
+        conditions: [
+          [FIELD.status, "intersects", ["raw", "to_review"]],
+          [FIELD.weeklyEligible, "==", true],
+        ],
+      },
+      visibleFields: [FIELD.title, FIELD.summary, FIELD.source, FIELD.sourceTime, FIELD.liked, FIELD.promote],
+    },
+    {
       name: "00 每周只看",
-      filter: { logic: "and", conditions: [[FIELD.status, "intersects", ["raw", "to_review"]], [FIELD.source, "intersects", mainSources]] },
+      filter: {
+        logic: "and",
+        conditions: [
+          [FIELD.status, "intersects", ["raw", "to_review"]],
+          [FIELD.source, "intersects", mainSources],
+          [FIELD.weeklyEligible, "==", true],
+          [FIELD.sourceTime, ">", `ExactDate(${shiftDate(today, -7)})`],
+        ],
+      },
       visibleFields: [FIELD.title, FIELD.source, FIELD.summary, FIELD.liked, FIELD.promote],
     },
     {
@@ -423,6 +499,26 @@ function ensureView(config, def, views) {
   const existing = views.find((view) => viewName(view) === def.name);
   if (existing) return viewId(existing) || def.name;
 
+  const alias = views.find((view) => (def.aliases || []).includes(viewName(view)));
+  if (alias) {
+    const id = viewId(alias) || viewName(alias);
+    runLarkCli([
+      "base",
+      "+view-rename",
+      "--as",
+      "user",
+      "--base-token",
+      config.baseToken,
+      "--table-id",
+      config.tableId,
+      "--view-id",
+      id,
+      "--name",
+      def.name,
+    ]);
+    return id;
+  }
+
   const created = runLarkCli([
     "base",
     "+view-create",
@@ -441,6 +537,7 @@ function ensureView(config, def, views) {
 
 function configureViews({ dryRun = false, today = localDate() } = {}) {
   const config = readConfig();
+  if (!dryRun) ensureSchema(config);
   const defs = viewDefinitions(config, today);
   const existingViews = dryRun ? [] : listViews(config);
   const configured = [];
@@ -584,8 +681,11 @@ function titleFromBody(body, fallback) {
 
 function cleanInline(value) {
   return String(value || "")
+    .replace(/<EMPTYPARAGRAPH>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
     .replace(/!\[[^\]]*]\([^)]+\)/g, "")
-    .replace(/\[[^\]]+]\(([^)]+)\)/g, "$1")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/[*_~]+/g, "")
     .replace(/`+/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -595,10 +695,255 @@ function markdownText(body) {
   return body
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/!\[[^\]]*]\([^)]+\)/g, "")
-    .replace(/\[[^\]]+]\(([^)]+)\)/g, "$1")
-    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/^\s*[-*>]\s+/gm, "")
+    .replace(/[*_~]+/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function markdownSections(body) {
+  const sections = [];
+  let current = { level: 0, title: "", lines: [] };
+  for (const line of String(body || "").split("\n")) {
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      if (current.title || current.lines.some((item) => item.trim())) sections.push(current);
+      current = { level: heading[1].length, title: cleanInline(heading[2]), lines: [] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.title || current.lines.some((item) => item.trim())) sections.push(current);
+  return sections;
+}
+
+function compactText(value, max = 280) {
+  return cleanInline(String(value || "").replace(/\s+/g, " ")).slice(0, max).trim();
+}
+
+function stripTerminalPunctuation(value) {
+  return String(value || "").replace(/[。！？!?；;：:,，.]+$/u, "").trim();
+}
+
+function sectionText(section) {
+  return compactText((section?.lines || []).map((line) => line.replace(/^\s*[-*]\s+/, "")).join("\n"), 12000);
+}
+
+function metadataFreeText(body) {
+  const sections = markdownSections(body);
+  const useful = [];
+  for (const section of sections) {
+    const name = section.title.toLowerCase();
+    if (section.level === 1) continue;
+    if (["source", "来源", "metadata", "元数据"].includes(name)) continue;
+    const text = sectionText(section)
+      .replace(/(?:^|\s)(?:Board|YouMind ID|Type|URL|Author|Published|Captured|Updated):\s*\S*/gi, " ")
+      .trim();
+    if (text) useful.push(text);
+  }
+  if (useful.length) return useful.join("\n\n").trim();
+
+  return compactText(String(body || "")
+    .split("\n")
+    .filter((line) => !/^#{1,6}\s+/.test(line))
+    .filter((line) => !/^\s*[-*]\s*(?:Board|YouMind ID|Type|URL|Author|Published|Captured|Updated):/i.test(line))
+    .join("\n"), 12000);
+}
+
+function hasMeaningfulContent(value) {
+  const semantic = cleanInline(value)
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\b(?:View Tweet|Read more|Source)\b/gi, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+  return semantic.length >= 8;
+}
+
+function headlineFromText(value, max = 100) {
+  const compact = cleanInline(value).replace(/https?:\/\/\S+/gi, " ").replace(/\s+/g, " ").trim();
+  const sentence = compact.match(/^(.{8,100}?)[.!?。！？](?=\s|[A-Z\p{Script=Han}]|$)/u)?.[1];
+  return stripTerminalPunctuation(sentence || compact.slice(0, max));
+}
+
+function researchTopic(fileName, fallbackTitle, sections) {
+  const baseName = path.basename(String(fileName || ""), path.extname(String(fileName || "")));
+  const fromFile = baseName
+    .replace(/^#(?:result|task)\s*/i, "")
+    .replace(/^C\d+\s*/i, "")
+    .replace(/^无新增\s*/i, "")
+    .replace(/^researcher\s*/i, "")
+    .trim();
+  if (/^#(?:result|task)\b/i.test(baseName) && fromFile) return fromFile;
+  const heading = sections.find((section) => section.level === 1 && !/^#?(?:result|task)\b/i.test(section.title));
+  if (heading?.title) return heading.title;
+  if (fromFile) return fromFile;
+  return cleanInline(fallbackTitle)
+    .replace(/^#?(?:result|task)\s*/i, "")
+    .replace(/^C\d+\s*/i, "")
+    .replace(/^无新增\s*/i, "")
+    .replace(/^researcher\s*/i, "")
+    .trim();
+}
+
+function cleanResearchLine(line) {
+  return cleanInline(String(line || "")
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/^\d+\.\s*(?:\*\*)?[^：:]+(?:\*\*)?[：:]\s*/, ""));
+}
+
+function deriveResearchDisplay({ body, fileName, fallbackTitle }) {
+  const sections = markdownSections(body);
+  const signal = `${fileName || ""}\n${fallbackTitle || ""}\n${body || ""}`;
+  const isTask = /(?:^|[/\s])#task\b/im.test(signal);
+  const isResult = /(?:^|[/\s])#result\b/im.test(signal);
+  if (!isTask && !isResult) return null;
+
+  const topic = researchTopic(fileName, fallbackTitle, sections) || "未命名研究主题";
+  const confidence = signal.match(/#result\s+(C\d+)/i)?.[1]?.toUpperCase() || "";
+  const noNew = /无新增|完全重复\s*\(?0%?\)?/i.test(signal);
+  const lines = String(body || "").split("\n").map(cleanResearchLine).filter(Boolean);
+  const direction = lines.find((line) => /^搜索方向[：:]/.test(line));
+  const resultLine = lines.find((line) => /^搜索(?!方向)[^：:]*?(?:未找到|结果)/.test(line))
+    || lines.find((line) => /已有知识完全重复|无新增价值/.test(line));
+  const action = lines.find((line) => /无需任何操作|继续忽略|可行动/.test(line));
+  const summary = compactText([resultLine, direction, action].filter(Boolean).join("；") || metadataFreeText(body));
+
+  if (isTask) {
+    return {
+      title: `[待研究] ${topic}`,
+      summary: compactText(direction || metadataFreeText(body) || `待研究：${topic}`),
+      topic,
+      contentText: metadataFreeText(body),
+      weeklyEligible: true,
+    };
+  }
+  return {
+    title: noNew ? `[无新增] ${topic}` : `[低置信度 ${confidence || "待核验"}] ${topic}`,
+    summary,
+    topic,
+    contentText: metadataFreeText(body),
+    weeklyEligible: !noNew,
+  };
+}
+
+function deriveFilterDisplay({ body }) {
+  const sections = markdownSections(body);
+  const candidates = sections.filter((section) => section.level === 2).map((section) => {
+    const bullets = section.lines
+      .filter((line) => /^\s*[-*]\s+/.test(line))
+      .map((line) => cleanInline(line.replace(/^\s*[-*]\s+/, "")))
+      .filter(Boolean);
+    return { title: section.title, bullets };
+  }).filter((section) => section.bullets.length && !section.bullets.every((line) => /无新增/.test(line)));
+
+  const first = candidates[0];
+  if (!first) {
+    return {
+      title: "[无新增] Filter 摘要",
+      summary: "本轮筛选没有发现可前置的新信息。",
+      topic: "",
+      contentText: metadataFreeText(body),
+      weeklyEligible: false,
+    };
+  }
+  const insights = first.bullets.map((line) => {
+    const parts = line.split(/\s+[—–]\s+/);
+    return parts.length > 1 ? parts.slice(1).join(" — ") : line;
+  });
+  const firstInsight = stripTerminalPunctuation(insights[0]);
+  return {
+    title: `${first.title}：${firstInsight}`.slice(0, 180),
+    summary: compactText(insights.slice(0, 2).join("；")),
+    topic: first.title,
+    contentText: metadataFreeText(body),
+    weeklyEligible: true,
+  };
+}
+
+function deriveReminderDisplay({ body }) {
+  const sections = markdownSections(body);
+  const actions = sections
+    .filter((section) => /今天必须推进/.test(section.title))
+    .flatMap((section) => section.lines)
+    .filter((line) => /^\s*\d+\.\s+/.test(line))
+    .map((line) => cleanInline(line
+      .replace(/^\s*\d+\.\s*/, "")
+      .replace(/^P\d+\s+[^：:]+[：:]\s*/, "")))
+    .filter(Boolean);
+  if (!actions.length) return null;
+  const first = headlineFromText(actions[0], 120);
+  return {
+    title: `超级个体提醒：${first}`.slice(0, 180),
+    summary: compactText(actions.slice(0, 2).join("；")),
+    topic: "超级个体提醒",
+    contentText: metadataFreeText(body),
+    weeklyEligible: true,
+  };
+}
+
+function deriveDisplayFields({ data = {}, body = "", fileName = "", fallbackTitle = "" } = {}) {
+  const research = deriveResearchDisplay({ body, fileName, fallbackTitle });
+  if (research) return research;
+
+  if (String(data.type || "") === "filter-digest" || /^filter-/i.test(path.basename(fileName))) {
+    return deriveFilterDisplay({ body });
+  }
+
+  if (String(data.capture || "") === "flag" && /超级个体提醒/.test(`${fallbackTitle}\n${body}`)) {
+    const reminder = deriveReminderDisplay({ body });
+    if (reminder) return reminder;
+  }
+
+  const sections = markdownSections(body);
+  const heading = sections.find((section) => section.level === 1)?.title;
+  const baseTitle = cleanInline(data.title || data["Full Title"] || heading || fallbackTitle || "Untitled").slice(0, 120);
+  const noText = /_?No text content returned by YouMind API\.?_?/i.test(body);
+  const isYouMindGroup = String(data.youmind_type || "").toLowerCase() === "group";
+  if (isYouMindGroup) {
+    const board = cleanInline(data.board || "YouMind");
+    return {
+      title: `[空分组] ${board} / ${baseTitle}`,
+      summary: "YouMind 分组占位，API 未返回正文；已从每周视图排除。",
+      topic: board,
+      contentText: "",
+      weeklyEligible: false,
+    };
+  }
+  if (noText) {
+    return {
+      title: `[无正文] ${baseTitle}`,
+      summary: "YouMind API 未返回正文；已从每周视图排除。",
+      topic: cleanInline(data.board || ""),
+      contentText: "",
+      weeklyEligible: false,
+    };
+  }
+
+  const description = sections.find((section) => section.level === 2 && /^description$/i.test(section.title));
+  const highlights = sections.find((section) => section.level === 2 && /^(highlights|高亮)$/i.test(section.title));
+  const content = sections.find((section) => section.level === 2 && /^(content|正文)$/i.test(section.title));
+  const contentText = sectionText(content) || sectionText(highlights) || sectionText(description) || metadataFreeText(body);
+  const summarySource = sectionText(description) || sectionText(highlights) || contentText;
+  const weeklyEligible = hasMeaningfulContent(contentText) || hasMeaningfulContent(summarySource);
+  if (/(?:本期|本轮).{0,30}无(?:符合|新增|保留)[^。.!?]{0,30}(?:内容|标准|价值)/i.test(summarySource)) {
+    return {
+      title: `[无新增] ${baseTitle}`,
+      summary: summarize(baseTitle, summarySource),
+      topic: "",
+      contentText,
+      weeklyEligible: false,
+    };
+  }
+  const displayTitle = /^(?:\[?no title\]?|untitled(?: youmind item)?)$/i.test(baseTitle)
+    ? (headlineFromText(summarySource) || "[无标题] 待补充")
+    : baseTitle;
+  return {
+    title: displayTitle,
+    summary: weeklyEligible ? summarize(displayTitle, summarySource) : "仅包含链接、图片或元数据；已从每周视图排除。",
+    topic: "",
+    contentText,
+    weeklyEligible,
+  };
 }
 
 function truncate(value, max = 12000) {
@@ -629,7 +974,9 @@ function inferRecord(file, vault = VAULT) {
   const rel = path.relative(vault, file);
   const lowerRel = rel.toLowerCase();
   const text = markdownText(body);
-  const title = String(data.title || data["Full Title"] || titleFromBody(body, path.basename(file, ".md")));
+  const fallbackTitle = String(data.title || data["Full Title"] || titleFromBody(body, path.basename(file, ".md")));
+  const derived = deriveDisplayFields({ data, body, fileName: path.basename(file), fallbackTitle });
+  const title = derived.title;
 
   let source = "Other";
   let type = "other";
@@ -653,12 +1000,12 @@ function inferRecord(file, vault = VAULT) {
   if (lowerRel.includes("30_research/readwise/")) {
     source = "Readwise";
     type = "highlight";
-    sourceId = `${rel}:${sha(text)}`;
+    sourceId = rel;
   }
   if (data.source === "flomo" || lowerRel.includes("00_inbox/flomo/")) {
     source = "Flomo";
     type = data.flomo_type || "quick-thought";
-    sourceId = data.flomo_id || `${rel}:${sha(text)}`;
+    sourceId = data.flomo_id || rel;
   }
   if (String(data.type || "").includes("brief-feedback")) {
     type = "brief-feedback";
@@ -669,7 +1016,7 @@ function inferRecord(file, vault = VAULT) {
   const sourceTime = normalizeDateTime(data.created || data.date || data.time || statSync(file).mtime.toISOString());
   const url = data.url || extractMetadataUrl(body) || "";
   const author = data.author || extractMetadataLine(body, "Author") || data.from || "";
-  const summary = summarize(title, text);
+  const summary = derived.summary;
 
   return {
     title,
@@ -680,7 +1027,8 @@ function inferRecord(file, vault = VAULT) {
     status: "raw",
     liked: "unknown",
     promote: false,
-    obsidianPath: rel,
+    sourcePath: rel,
+    obsidianPath: "",
     url: String(url || ""),
     author: String(author || ""),
     sourceTime,
@@ -688,10 +1036,12 @@ function inferRecord(file, vault = VAULT) {
     tags: tags.join(", "),
     aiTags,
     project: String(data.project || ""),
-    topic: "",
+    topic: derived.topic,
     summary,
-    raw: truncate(text),
+    raw: truncate(derived.contentText || text),
     hash: sha(markdown),
+    weeklyEligible: derived.weeklyEligible,
+    derivationVersion: DERIVATION_VERSION,
     lastSync: localDateTime(),
   };
 }
@@ -724,7 +1074,11 @@ function inferTags(text) {
 }
 
 function summarize(title, text) {
-  const compact = text.replace(/\s+/g, " ").trim();
+  const compact = cleanInline(text)
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\bView Tweet\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!compact) return title;
   return compact.slice(0, 280);
 }
@@ -749,7 +1103,7 @@ function baseRecordPayload(record, includeUserFields = true) {
     [FIELD.sourceId]: record.sourceId,
     [FIELD.sourceKey]: record.sourceKey,
     [FIELD.type]: record.type,
-    [FIELD.obsidianPath]: record.obsidianPath,
+    [FIELD.sourcePath]: record.sourcePath,
     [FIELD.url]: record.url,
     [FIELD.author]: record.author,
     [FIELD.tags]: record.tags,
@@ -759,11 +1113,14 @@ function baseRecordPayload(record, includeUserFields = true) {
     [FIELD.summary]: record.summary,
     [FIELD.raw]: record.raw,
     [FIELD.hash]: record.hash,
+    [FIELD.weeklyEligible]: record.weeklyEligible,
+    [FIELD.derivationVersion]: record.derivationVersion,
     [FIELD.lastSync]: record.lastSync,
   };
   if (record.sourceTime) payload[FIELD.sourceTime] = record.sourceTime;
-  if (record.importedAt) payload[FIELD.importedAt] = record.importedAt;
   if (includeUserFields) {
+    payload[FIELD.obsidianPath] = record.obsidianPath;
+    if (record.importedAt) payload[FIELD.importedAt] = record.importedAt;
     payload[FIELD.status] = record.status;
     payload[FIELD.liked] = record.liked;
     payload[FIELD.promote] = record.promote;
@@ -771,7 +1128,7 @@ function baseRecordPayload(record, includeUserFields = true) {
   return payload;
 }
 
-function listBaseRecords(config, fields = [FIELD.sourceKey, FIELD.hash, FIELD.obsidianPath, FIELD.status, FIELD.liked, FIELD.promote]) {
+function listBaseRecords(config, fields = [FIELD.sourceKey, FIELD.hash, FIELD.sourcePath, FIELD.obsidianPath, FIELD.derivationVersion, FIELD.status, FIELD.liked, FIELD.promote]) {
   const rows = [];
   let offset = 0;
   const limit = 200;
@@ -854,8 +1211,198 @@ function recordIndex(rows) {
   return map;
 }
 
+function sourcePathFromFields(fields) {
+  const explicit = cellText(fields[FIELD.sourcePath]);
+  if (explicit) return explicit;
+  const status = cellText(fields[FIELD.status]);
+  const legacyPath = cellText(fields[FIELD.obsidianPath]);
+  if (legacyPath && status !== "promoted") return legacyPath;
+  const sourceKey = cellText(fields[FIELD.sourceKey]);
+  const tail = sourceKey.slice(sourceKey.indexOf(":") + 1).replace(/:[0-9a-f]{24}$/i, "");
+  const pathMatch = tail.match(/(?:^|.*?)(00_Inbox\/.*\.md|30_Research\/.*\.md)$/);
+  return pathMatch?.[1] || (tail.includes("/") && tail.endsWith(".md") ? tail : "");
+}
+
+function classifyRecordLifecycle(fields, currentKeys, currentPaths) {
+  const key = cellText(fields[FIELD.sourceKey]);
+  if (currentKeys.has(key)) return "current";
+  const sourcePath = sourcePathFromFields(fields);
+  return sourcePath && currentPaths.has(sourcePath) ? "historical" : "removed";
+}
+
+function legacyMarkdown(fields) {
+  const title = cellText(fields[FIELD.title]);
+  const raw = cellText(fields[FIELD.raw]);
+  const lines = raw.split("\n");
+  const normalized = lines.map((line, index) => {
+    const trimmed = line.trim();
+    if (index === 0 && trimmed === title) return `# ${title}`;
+    if (/^(Source|Metadata|Description|Highlights|Content|来源|元数据|高亮|正文)$/i.test(trimmed)) return `## ${trimmed}`;
+    return line;
+  });
+  if (!normalized.some((line) => /^#\s+/.test(line)) && title) normalized.unshift(`# ${title}`, "");
+  return normalized.join("\n");
+}
+
+function boardFromSourcePath(sourcePath) {
+  const parts = String(sourcePath || "").split(path.sep);
+  const index = parts.findIndex((part) => part === "YouMind");
+  return index >= 0 ? parts[index + 1] || "YouMind" : "YouMind";
+}
+
+function deriveExistingFields(fields) {
+  const sourcePath = sourcePathFromFields(fields);
+  const fileName = path.basename(sourcePath || cellText(fields[FIELD.sourceKey]) || "record.md");
+  const raw = cellText(fields[FIELD.raw]);
+  const source = cellText(fields[FIELD.source]);
+  const noText = /No text content returned by YouMind API/i.test(raw);
+  const data = {
+    source: source.toLowerCase(),
+    type: /^filter-/i.test(fileName) ? "filter-digest" : "",
+    youmind_type: source === "YouMind" && noText ? "group" : "",
+    board: boardFromSourcePath(sourcePath),
+  };
+  const derived = deriveDisplayFields({
+    data,
+    body: legacyMarkdown(fields),
+    fileName,
+    fallbackTitle: cellText(fields[FIELD.title]),
+  });
+  return {
+    [FIELD.title]: derived.title,
+    [FIELD.topic]: derived.topic,
+    [FIELD.summary]: derived.summary,
+    [FIELD.raw]: truncate(derived.contentText || raw),
+    [FIELD.sourcePath]: sourcePath,
+    [FIELD.weeklyEligible]: derived.weeklyEligible,
+    [FIELD.derivationVersion]: DERIVATION_VERSION,
+    [FIELD.lastSync]: localDateTime(),
+  };
+}
+
+function sameCellValue(actual, desired) {
+  if (desired === undefined) return true;
+  if (desired === null) return !cellText(actual);
+  if (typeof desired === "boolean") return String(cellText(actual)).toLowerCase() === String(desired);
+  if (typeof desired === "number") return Number(cellText(actual)) === desired;
+  let actualText = cellText(actual);
+  if (/^https?:\/\//i.test(String(desired))) {
+    actualText = actualText.match(/^\[[^\]]*]\((https?:\/\/[^)]+)\)$/i)?.[1] || actualText;
+  }
+  return actualText === String(desired);
+}
+
+function needsRecordUpdate(fields, payload) {
+  return recordDiffFields(fields, payload).length > 0;
+}
+
+function recordDiffFields(fields, payload) {
+  return Object.entries(payload).filter(([name, value]) => !sameCellValue(fields[name], value)).map(([name]) => name);
+}
+
+function refreshDerived({ dryRun = false } = {}) {
+  return reconcileRecords({ dryRun });
+}
+
+function hasSelectionSignal(fields) {
+  const status = cellText(fields[FIELD.status]);
+  const liked = cellText(fields[FIELD.liked]);
+  const promote = String(cellText(fields[FIELD.promote])).toLowerCase() === "true";
+  return status === "selected" || liked === "strong_like" || promote;
+}
+
+function stripLifecyclePrefix(title) {
+  return String(title || "").replace(/^\[(?:历史版本|源文件已移除|已归档)]\s*/, "").trim();
+}
+
+function reconcileRecords({ dryRun = false } = {}) {
+  const config = readConfig();
+  if (!dryRun) ensureSchema(config);
+  const rows = listBaseRecords(config, Object.values(FIELD));
+  const localRecords = sourceFiles().map((file) => inferRecord(file));
+  const byKey = new Map(localRecords.map((record) => [record.sourceKey, record]));
+  const currentKeys = new Set(byKey.keys());
+  const currentPaths = new Set(localRecords.map((record) => record.sourcePath));
+  const counts = { current: 0, historical: 0, removed: 0, updated: 0, unchanged: 0, protected: 0 };
+  const diffCounts = {};
+  const diffSamples = [];
+
+  for (const row of rows) {
+    const fields = rowFields(row);
+    const lifecycle = classifyRecordLifecycle(fields, currentKeys, currentPaths);
+    counts[lifecycle] += 1;
+    let payload;
+
+    if (lifecycle === "current") {
+      payload = baseRecordPayload(byKey.get(cellText(fields[FIELD.sourceKey])), false);
+      const legacyPromotionPath = cellText(fields[FIELD.obsidianPath]);
+      if (legacyPromotionPath && cellText(fields[FIELD.status]) !== "promoted") payload[FIELD.obsidianPath] = null;
+    } else {
+      const derived = deriveExistingFields(fields);
+      const baseTitle = stripLifecyclePrefix(derived[FIELD.title] || cellText(fields[FIELD.title]) || "Untitled");
+      const prefix = lifecycle === "historical" ? "历史版本" : "源文件已移除";
+      const reason = lifecycle === "historical"
+        ? "该来源已有当前版本，本条保留作历史追溯。"
+        : "本地源文件已不存在，本条保留作历史追溯。";
+      payload = {
+        ...derived,
+        [FIELD.title]: `[${prefix}] ${baseTitle}`.slice(0, 180),
+        [FIELD.summary]: compactText(`${reason}${derived[FIELD.summary] || ""}`),
+        [FIELD.weeklyEligible]: false,
+      };
+      if (!hasSelectionSignal(fields) && ["raw", "to_review"].includes(cellText(fields[FIELD.status]))) {
+        payload[FIELD.status] = "archived";
+      } else if (hasSelectionSignal(fields)) {
+        counts.protected += 1;
+      }
+      if (cellText(fields[FIELD.obsidianPath]) && cellText(fields[FIELD.status]) !== "promoted") payload[FIELD.obsidianPath] = null;
+    }
+
+    delete payload[FIELD.lastSync];
+    const diffFields = recordDiffFields(fields, payload);
+    if (!diffFields.length) {
+      counts.unchanged += 1;
+      continue;
+    }
+    for (const field of diffFields) diffCounts[field] = (diffCounts[field] || 0) + 1;
+    if (dryRun && diffSamples.length < 8 && diffFields.some((field) => [FIELD.title, FIELD.topic].includes(field))) {
+      diffSamples.push({
+        lifecycle,
+        key: cellText(fields[FIELD.sourceKey]),
+        fields: diffFields,
+        title: [cellText(fields[FIELD.title]), payload[FIELD.title]],
+        topic: [cellText(fields[FIELD.topic]), payload[FIELD.topic]],
+      });
+    }
+    if (!dryRun) {
+      payload[FIELD.lastSync] = localDateTime();
+      runLarkCli([
+        "base",
+        "+record-upsert",
+        "--as",
+        "user",
+        "--base-token",
+        config.baseToken,
+        "--table-id",
+        config.tableId,
+        "--record-id",
+        rowId(row),
+        "--json",
+        JSON.stringify(payload),
+      ], { attempts: 3 });
+    }
+    counts.updated += 1;
+  }
+
+  const diffs = Object.entries(diffCounts).sort((a, b) => b[1] - a[1]).map(([field, count]) => `${field}:${count}`).join(",") || "none";
+  log(`reconcile-records: current=${counts.current}; historical=${counts.historical}; removed=${counts.removed}; updated=${counts.updated}; unchanged=${counts.unchanged}; protected=${counts.protected}; diffs=${diffs}; dry_run=${dryRun}`);
+  if (diffSamples.length) log(`reconcile-records: diff_samples=${JSON.stringify(diffSamples)}`);
+  if (!dryRun) markSuccess("reconcile-records");
+}
+
 function syncVault({ dryRun = false } = {}) {
   const config = readConfig();
+  if (!dryRun) ensureSchema(config);
   const existing = recordIndex(listBaseRecords(config));
   const records = sourceFiles().map((file) => inferRecord(file));
   let created = 0;
@@ -885,12 +1432,16 @@ function syncVault({ dryRun = false } = {}) {
 
     const fields = hit.fields;
     const sameHash = cellText(fields[FIELD.hash]) === record.hash;
-    const samePath = cellText(fields[FIELD.obsidianPath]) === record.obsidianPath;
-    if (sameHash && samePath) {
+    const samePath = sourcePathFromFields(fields) === record.sourcePath;
+    const sameVersion = Number(cellText(fields[FIELD.derivationVersion])) === DERIVATION_VERSION;
+    const needsPathMigration = Boolean(cellText(fields[FIELD.obsidianPath])) && cellText(fields[FIELD.status]) !== "promoted";
+    if (sameHash && samePath && sameVersion && !needsPathMigration) {
       unchanged += 1;
       continue;
     }
     if (!dryRun) {
+      const payload = baseRecordPayload(record, false);
+      if (needsPathMigration) payload[FIELD.obsidianPath] = null;
       runLarkCli([
         "base",
         "+record-upsert",
@@ -903,8 +1454,8 @@ function syncVault({ dryRun = false } = {}) {
         "--record-id",
         rowId(hit.row),
         "--json",
-        JSON.stringify(baseRecordPayload(record, false)),
-      ]);
+        JSON.stringify(payload),
+      ], { attempts: 3 });
     }
     updated += 1;
   }
@@ -1219,8 +1770,11 @@ async function main() {
     return;
   }
 	  if (command === "init") init(args);
+	  else if (command === "ensure-schema") ensureSchema(readConfig(), { dryRun: Boolean(args["dry-run"]) });
 	  else if (command === "configure-views") configureViews({ dryRun: Boolean(args["dry-run"]), today: args.today || localDate() });
 	  else if (command === "sync-vault") syncVault({ dryRun: Boolean(args["dry-run"]) });
+	  else if (command === "refresh-derived") refreshDerived({ dryRun: Boolean(args["dry-run"]) });
+	  else if (command === "reconcile-records") reconcileRecords({ dryRun: Boolean(args["dry-run"]) });
 	  else if (command === "promote") promote({ dryRun: Boolean(args["dry-run"]), noGit: Boolean(args["no-git"]) });
 	  else if (command === "status") status();
   else throw new Error(`Unknown command: ${command}`);
@@ -1229,22 +1783,35 @@ async function main() {
 const thisFile = fileURLToPath(import.meta.url);
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(thisFile)) {
   main().catch((error) => {
-    markError(error, process.argv[2] || "unknown");
+    try {
+      markError(error, process.argv[2] || "unknown");
+    } catch (stateError) {
+      log(`warn: could not persist error state: ${stateError.message}`);
+    }
     log(`error: ${error.stack || error.message}`);
     process.exitCode = 1;
   });
 }
 
 export {
-  FIELD,
-  SELECTS,
+	  CONFIG_PATH,
+	  DERIVATION_VERSION,
+	  FIELD,
+	  ROOT,
+	  SELECTS,
+	  STATE_PATH,
   baseRecordPayload,
   buildPromotionMarkdown,
+	  classifyRecordLifecycle,
+	  deriveDisplayFields,
+	  ensureSchema,
 	  inferRecord,
 	  isTransientLarkError,
 	  parseFrontmatter,
 	  readwiseInMainView,
+	  refreshDerived,
 	  shouldPromote,
+	  sourcePathFromFields,
 	  sourceFiles,
 	  viewDefinitions,
 	};

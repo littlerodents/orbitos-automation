@@ -25,7 +25,7 @@ export function isRecentFile(fileName, days, now) {
   const fileDate = new Date(dateMatch[1]);
   const diffMs = today.getTime() - fileDate.getTime();
   const diffDays = diffMs / (1000 * 60 * 60 * 24);
-  return diffDays <= days;
+  return diffDays >= 0 && diffDays <= days;
 }
 
 export function extractNoteTitle(content, fileName) {
@@ -99,11 +99,10 @@ export function shouldWriteAnalystNote(notes, analysis) {
 
 // ============ Logic functions (use injectable runners) ============
 
-export async function readSelectedNotes(days) {
+export async function readSelectedNotes(days, now = new Date(Date.now() + 8 * 3600 * 1000)) {
   const list = await ghCaller("GET", "30_Research/Selected", null);
   if (!list || !Array.isArray(list)) return [];
 
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
   const notes = [];
   for (const f of list) {
     if (!f.name || !f.name.endsWith(".md")) continue;
@@ -183,14 +182,15 @@ export async function analyzePatterns(notes, projectContext) {
 
 export async function processAnalystTask(opts = {}) {
   const days = opts.days || 3;
-  const notes = await readSelectedNotes(days);
+  const now = opts.now || new Date(Date.now() + 8 * 3600 * 1000);
+  const notes = await readSelectedNotes(days, now);
   const projectContext = await readProjectContext();
   const analysis = await analyzePatterns(notes, projectContext);
   const shouldWrite = shouldWriteAnalystNote(notes, analysis);
 
   if (!shouldWrite) return { no_action: true, notesCount: notes.length, reason: "0 signposts + notes <= 2" };
 
-  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = now.toISOString().slice(0, 10);
   const relatedNotes = notes.map(n => n.name);
   const md = buildAnalystMarkdown(analysis, today, relatedNotes);
   const mdB64 = Buffer.from(md, "utf8").toString("base64");

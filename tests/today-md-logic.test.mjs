@@ -23,6 +23,7 @@ const rand = (rng, min, max) => Math.floor(rng() * (max - min + 1)) + min;
 const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
 
 const VARS = { OWNER: "test", REPO: "test", BRANCH: "main" };
+const FIXED_NOW = new Date("2026-07-05T12:00:00Z");
 
 const BRIEF = `---\ntype: daily-brief\ndate: 2026-07-05\n---\n# Brief — 2026-07-05\n\n## TL;DR\n今天的关键是 AI agent 组织架构。\n两个来源指向同一方向。\n\n## CONNECTIONS\n一些连接\n\n## QUESTION\n一个问题`;
 
@@ -206,7 +207,7 @@ test("readResearcherNotes: with recent files", async () => {
     return null;
   });
   setStateVars(VARS);
-  const r = await readResearcherNotes("2026-07-05", 24);
+  const r = await readResearcherNotes("2026-07-05", 24, FIXED_NOW);
   assert.equal(r.length, 1);
   assert.ok(r[0].link.includes("test"));
   resetRunners();
@@ -215,7 +216,7 @@ test("readResearcherNotes: with recent files", async () => {
 test("readResearcherNotes: no files", async () => {
   setGhCaller(async () => []);
   setStateVars(VARS);
-  assert.equal((await readResearcherNotes("2026-07-05", 24)).length, 0);
+  assert.equal((await readResearcherNotes("2026-07-05", 24, FIXED_NOW)).length, 0);
   resetRunners();
 });
 
@@ -281,7 +282,7 @@ test("readFeishuFlags: with files", async () => {
     return null;
   });
   setStateVars(VARS);
-  const f = await readFeishuFlags();
+  const f = await readFeishuFlags(FIXED_NOW);
   assert.equal(f.length, 1);
   resetRunners();
 });
@@ -289,7 +290,7 @@ test("readFeishuFlags: with files", async () => {
 test("readFeishuFlags: no files", async () => {
   setGhCaller(async () => []);
   setStateVars(VARS);
-  assert.equal((await readFeishuFlags()).length, 0);
+  assert.equal((await readFeishuFlags(FIXED_NOW)).length, 0);
   resetRunners();
 });
 
@@ -315,7 +316,7 @@ test("processTodayTask: all sources available", async () => {
     return null;
   });
   setStateVars(VARS);
-  const r = await processTodayTask();
+  const r = await processTodayTask({ now: FIXED_NOW });
   assert.equal(r.action, "write");
   assert.equal(r.path, "Today.md");
   assert.equal(r.sha, "existing-sha");
@@ -335,7 +336,7 @@ test("processTodayTask: all sources available", async () => {
 test("processTodayTask: empty vault → fallback text", async () => {
   setGhCaller(async () => null);
   setStateVars(VARS);
-  const r = await processTodayTask();
+  const r = await processTodayTask({ now: FIXED_NOW });
   assert.equal(r.action, "write");
   assert.equal(r.sha, "");
   const md = Buffer.from(r.b64, "base64").toString("utf8");
@@ -347,7 +348,7 @@ test("processTodayTask: empty vault → fallback text", async () => {
 test("processTodayTask: ghCaller error → fallback", async () => {
   setGhCaller(async () => { throw new Error("network"); });
   setStateVars(VARS);
-  const r = await processTodayTask();
+  const r = await processTodayTask({ now: FIXED_NOW });
   assert.equal(r.action, "write");
   const md = Buffer.from(r.b64, "base64").toString("utf8");
   assert.ok(md.includes("今天还没有 brief"));
@@ -393,7 +394,7 @@ test("FUZZ ROUND 1 (seed 1): variable vault content invariants", async () => {
     });
     setStateVars(VARS);
 
-    const r = await processTodayTask();
+    const r = await processTodayTask({ now: FIXED_NOW });
     assert.equal(r.action, "write");
     assert.equal(r.path, "Today.md");
     const md = Buffer.from(r.b64, "base64").toString("utf8");
@@ -438,7 +439,7 @@ test("FUZZ ROUND 2 (seed 2): variable file content + edge cases", async () => {
     });
     setStateVars(VARS);
 
-    const r = await processTodayTask();
+    const r = await processTodayTask({ now: FIXED_NOW });
     assert.equal(r.action, "write");
     const md = Buffer.from(r.b64, "base64").toString("utf8");
     assert.ok(md.includes("# 今天"));

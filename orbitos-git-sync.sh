@@ -24,12 +24,23 @@ fi
 
 if ! git -C "$VAULT" fetch --prune origin main >> "$LOG" 2>&1; then
   log "error: fetch failed"
-  exit 0
+  exit 1
 fi
 
 DIVERGENCE="$(git -C "$VAULT" rev-list --left-right --count "HEAD...@{upstream}")"
 AHEAD="${DIVERGENCE%%	*}"
 BEHIND="${DIVERGENCE##*	}"
+
+# 推送本地领先提交（vault 备份 / 日报提交）。obsidian-git 的推送在 2026-08 rebase
+# 事故后不可靠，此处成为唯一稳定推送通道；失败只记日志，下轮（5 分钟后）自动重试。
+# 放在 rebase 分支之前 —— behind=0 的早退路径也必须执行推送。
+if [ "$AHEAD" != "0" ]; then
+  if git -C "$VAULT" push origin main >> "$LOG" 2>&1; then
+    log "ok: pushed $AHEAD commit(s)"
+  else
+    log "warn: push failed, will retry next cycle (ahead=$AHEAD)"
+  fi
+fi
 
 if [ "$BEHIND" = "0" ]; then
   log "ok: up to date; ahead=$AHEAD behind=$BEHIND"
@@ -44,6 +55,7 @@ else
   # 冲突卡死会每 5 分钟稳定失败——abort 兜底回到干净状态，下轮重试
   log "error: pull --rebase --autostash failed; ahead=$AHEAD behind=$BEHIND; aborting rebase"
   git -C "$VAULT" rebase --abort >> "$LOG" 2>&1 || true
+  exit 1
 fi
 
 # autostash 警示：pop 冲突会把主人未提交改动留在 stash 里，必须显眼提示

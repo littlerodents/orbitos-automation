@@ -8,6 +8,8 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { loadConfig } from "./lib/config.mjs";
 
 const cfg = loadConfig();
@@ -163,6 +165,32 @@ async function main() {
   state.processed = [...new Set(state.processed)].slice(-500);
   saveState(state);
   console.log(`done → ${outName} (${batch.length} bookmarks, strong=${strong})`);
+
+  // strong 书签 → 飞书行动追踪表（学习增量直接算进行动）
+  try { pushBookmarkActions(batch, byId); } catch (e) { console.error(`feishu action push failed (non-fatal): ${e.message}`); }
+}
+
+// 只推 strong 且带可做项的，每批最多 3 条防泛滥；文本必须具体到能直接动手
+function pushBookmarkActions(batch, byId) {
+  const T = JSON.parse(readFileSync(join(homedir(), ".config/orbitos-automation/tracker.config.json"), "utf8"));
+  const SAFE_PATH = `/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`;
+  const actions = batch
+    .map(x => ({ x, a: byId.get(x.file) }))
+    .filter(({ a }) => a && a.signal === "strong" && a.actionable && a.essence)
+    .slice(0, 3)
+    .map(({ x, a }) => ({
+      行动: `精读：《${a.essence.replace(/。$/,"")}》→ ${a.actionable}（原文: ${x.fm?.url || "见原始捕获"}）`,
+      状态: ["未动"],
+    }));
+  if (!actions.length) return console.log("no strong actionable bookmarks → no action rows");
+  const r = spawnSync(cfg.lark_cli_path, [
+    "base", "+record-batch-create", "--base-token", T.base_token, "--table-id", T.action_table,
+    "--as", "user", "--format", "json",
+    "--json", JSON.stringify({ create_records: actions }),
+  ], { encoding: "utf8", env: { ...process.env, PATH: `${SAFE_PATH}:${process.env.PATH || ""}` } });
+  const out = JSON.parse(r.stdout || "{}");
+  if (!out.ok) throw new Error(out.error?.message || "lark create failed");
+  console.log(`pushed ${actions.length} bookmark action(s) to Feishu tracker`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

@@ -82,7 +82,7 @@ function refreshAges() {
     if (status === "已完成" || status === "已放弃") continue;
     const start = startDateFor(s(r.行动), state);
     const age = Math.max(0, Math.round((todayMs - new Date(`${start}T00:00:00+08:00`).getTime()) / DAY));
-    if (Number(r.卡龄天数) !== age) updates[r._id] = { 卡龄天数: age };
+    if (r.卡龄天数 == null || Number(r.卡龄天数) !== age) updates[r._id] = { 卡龄天数: age };
   }
   batchUpdate(T.action_table, updates);
   return rows;
@@ -130,7 +130,7 @@ function upsertDailyRow(actionRows) {
 function upsertWeeklyRow(actionRows) {
   const rows = listRows(T.daily_table);
   const key = `周复盘 ${todayStr}`;
-  if (rows.some(r => s(r["TL;DR"]) === key)) return console.log("weekly row exists");
+  if (rows.some(r => s(r["TL;DR"]).startsWith("周复盘：") || s(r["TL;DR"]) === key)) return console.log("weekly row exists");
   const weekAgo = todayMs - 6 * DAY;
   const inWeek = rows.filter(r => {
     const t = dstr(r.日期);
@@ -142,10 +142,9 @@ function upsertWeeklyRow(actionRows) {
   const readDays = inWeek.filter(r => r.精读打卡 === true).length;
   const done = actionRows.filter(r => s(r.状态) === "已完成").length;
   batchCreate(T.daily_table, [{
-    日期: todayMs, "TL;DR": key,
+    日期: todayMs, "TL;DR": `周复盘：精读 ${readDays} 天 · 行动完成 ${done}/${actionRows.length} · 新增书签 ${bmN}`,
     行动完成: `${done}/${actionRows.length}`,
     新增书签: bmN,
-    备注: `本周精读 ${readDays} 天`,
   }]);
   console.log(`weekly row created: ${key}`);
 }
