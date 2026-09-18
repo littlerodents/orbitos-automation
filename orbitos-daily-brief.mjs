@@ -35,7 +35,7 @@ function actionsFromTracker() {
     const d = larkJson(["base", "+record-list", "--base-token", T.base_token, "--table-id", T.action_table]);
     if (!d) return [];
     const cols = d.fields || [];
-    const ai = cols.indexOf("行动"), si = cols.indexOf("状态"), di = cols.indexOf("开始卡于");
+    const ai = cols.indexOf("行动"), si = cols.indexOf("状态"), di = cols.indexOf("开始卡于"), ri = cols.indexOf("为什么这么做");
     const todayMs = Date.now() + 8 * 3600e3;
     return (d.data || []).map(vals => {
       const start = String((Array.isArray(vals[di]) ? vals[di][0] : vals[di]) || "").slice(0, 10);
@@ -44,6 +44,7 @@ function actionsFromTracker() {
       return {
         text: (Array.isArray(vals[ai]) ? vals[ai][0] : vals[ai]) || "",
         status: (Array.isArray(vals[si]) ? vals[si][0] : vals[si]) || "未动",
+        rationale: String((Array.isArray(vals[ri]) ? vals[ri][0] : vals[ri]) || ""),
         start,
         age,
       };
@@ -111,8 +112,8 @@ function gatherInputs() {
     .filter(a => a.status === "未动" || a.status === "进行中")
     .sort((a, b) => b.age - a.age);
   const doneN = actionsFromTracker().filter(a => a.status === "已完成").length;
-  const actionLines = actions.slice(0, 8)
-    .map(a => `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天] ${a.text}`)
+  const actionLines = actions.slice(0, 6)
+    .map(a => `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天] ${a.text}\n  依据: ${(a.rationale || "（未记录——在飞书表'为什么这么做'列补上）").replace(/\n/g, " ⏎ ")}`)
     .join("\n");
 
   // 4. 活跃项目名
@@ -141,7 +142,11 @@ OrbitOS 是极简系统：飞书是提醒面，Obsidian 存精选。他在意的
 ## TL;DR
 一句话，≤30 个汉字，**今天 5 分钟内能启动的具体动作**（打开什么网站/文件、写下什么、发布什么），禁止抽象口号（如"完成发布""持续推进"这类空话必须换成具体第一步）。
 ## 行动提醒
-从行动表里挑 2-3 项最该动的（卡龄越长越优先）。**每条必须给出具体第一步：打开哪个网址/文件、做什么动作、大约几分钟**。行动文本里通常已带第一步，直接复述并强化。如果他一直没动某项，点破卡了多少天。
+从行动表里挑 2-3 项最该动的（卡得越久越优先）。每项按四段写：
+1. **第一步**：打开哪个网址/文件、做什么、几分钟（行动文本里已带，复述强化）。
+2. **为什么**：背景一句话（依据栏有现成答案）。
+3. **最优吗**：如果有更优路径或已对比过的替代方案，直说；没有就不编。
+4. **时间账**：花几分钟 vs 已经卡了多少天；若沉没成本已超收益（价值衰减、窗口过期），直接建议把状态改「已放弃」——放弃也是完成决策，不要为了催而催。
 ## 学习增量
 ${weekly ? "本周" : "昨日"}书签整理/研究笔记里最值得精读的 ≤3 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
 ## CONNECTIONS

@@ -118,7 +118,7 @@ async function main() {
 
   const payload = batch.map(excerpt);
   const system = `你是 Evander 的书签整理员。他的主线：一人公司打法(OPC)、程序化SEO、个人AI基础设施(PAI)、AI agent 工程。对每条 X 书签输出一个 JSON 对象（数组）：
-{"id":"原文件名","topic":"${TOPICS.join("|")} 之一","signal":"strong|medium|weak","essence":"一句中文 essence，≤40字","why":"与他主线的关联或'纯噪声'判断，≤60字","actionable":"可执行动作或空字符串"}
+{"id":"原文件名","topic":"${TOPICS.join("|")} 之一","signal":"strong|medium|weak","essence":"一句中文 essence，≤40字","why":"与他主线的关联或'纯噪声'判断，≤60字","actionable":"可执行动作或空字符串","efficiency":"如果做：时间成本 vs 收益 vs 与已有研究的关系，一句话，≤50字"}
 只输出 JSON 数组，不要 markdown 代码块。strong = 直接改变某个主线的打法/有具体数字/一手方法论；medium = 有用但可推迟；weak = 泛泛而谈/纯激励/广告。`;
 
   const user = payload.map(p => `### ${p.id}\nauthor: ${p.author}\nurl: ${p.url}\n内容: ${p.text}`).join("\n\n");
@@ -182,6 +182,7 @@ function pushBookmarkActions(batch, byId) {
       行动: `精读：《${a.essence.replace(/。$/,"")}》→ ${a.actionable}（原文: ${x.fm?.url || "见原始捕获"}）`,
       状态: ["未动"],
       开始卡于: Date.now(),
+      为什么这么做: `为什么：${a.why || "与他主线相关的 strong 信号书签"}。\n最优性：经本批书签对比筛选为 strong（直接改变打法的资料）。\n时间账：${a.efficiency || "精读约 15-30 分钟，可复用到主线笔记"}。`,
     }));
   if (!actions.length) return console.log("no strong actionable bookmarks → no action rows");
   const r = spawnSync(cfg.lark_cli_path, [
