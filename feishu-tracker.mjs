@@ -17,7 +17,6 @@ const cfg = loadConfig();
 const VAULT = cfg.vault_path;
 const LARK = cfg.lark_cli_path;
 const T = JSON.parse(readFileSync(join(homedir(), ".config/orbitos-automation/tracker.config.json"), "utf8"));
-const STATE_PATH = join(homedir(), ".config/orbitos-automation/tracker-state.json");
 const weekly = process.argv.includes("--weekly");
 
 const DAY = 86400e3;
@@ -61,28 +60,14 @@ function batchCreate(tableId, createRecords) {
 
 const s = v => (Array.isArray(v) ? v[0] : v) ?? "";
 const dstr = v => String(v ?? "").slice(0, 10);
-const norm = t => String(t ?? "").replace(/[\s()[\]（）：:，,。.·、\-—/？?"“”']/g, "");
 
-// ---------- 行动卡龄（起始日期在 state 文件，新行动首见日记为今天） ----------
-function loadState() { try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); } catch { return { start_dates: {} }; } }
-function startDateFor(text, state) {
-  const key = norm(text).slice(0, 8);
-  if (state.start_dates[key]) return state.start_dates[key];
-  state.start_dates[key] = todayStr;
-  try { writeFileSync(STATE_PATH, JSON.stringify(state, null, 2)); } catch {}
-  return todayStr;
-}
-
-function refreshAges() {
-  const state = loadState();
+// ---------- 行动表维护：开始卡于 缺失的行（用户新加/书签新入）补今天 ----------
+function fillStartDates() {
   const rows = listRows(T.action_table);
   const updates = {};
   for (const r of rows) {
-    const status = s(r.状态);
-    if (status === "已完成" || status === "已放弃") continue;
-    const start = startDateFor(s(r.行动), state);
-    const age = Math.max(0, Math.round((todayMs - new Date(`${start}T00:00:00+08:00`).getTime()) / DAY));
-    if (r.卡龄天数 == null || Number(r.卡龄天数) !== age) updates[r._id] = { 卡龄天数: age };
+    if (s(r.状态) === "已完成" || s(r.状态) === "已放弃") continue;
+    if (!dstr(r.开始卡于)) updates[r._id] = { 开始卡于: todayMs };
   }
   batchUpdate(T.action_table, updates);
   return rows;
@@ -150,7 +135,7 @@ function upsertWeeklyRow(actionRows) {
 }
 
 async function main() {
-  const actionRows = refreshAges();
+  const actionRows = fillStartDates();
   if (weekly) upsertWeeklyRow(actionRows);
   else upsertDailyRow(actionRows);
   console.log(`tracker sync done (actions=${actionRows.length})`);

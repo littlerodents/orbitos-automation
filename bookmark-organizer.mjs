@@ -181,6 +181,7 @@ function pushBookmarkActions(batch, byId) {
     .map(({ x, a }) => ({
       行动: `精读：《${a.essence.replace(/。$/,"")}》→ ${a.actionable}（原文: ${x.fm?.url || "见原始捕获"}）`,
       状态: ["未动"],
+      开始卡于: Date.now(),
     }));
   if (!actions.length) return console.log("no strong actionable bookmarks → no action rows");
   const r = spawnSync(cfg.lark_cli_path, [
