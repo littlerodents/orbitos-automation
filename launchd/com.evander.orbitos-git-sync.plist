@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.evander.orbitos-git-sync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/evander/codex/orbitos-automation/run-with-alert.sh</string>
+		<string>orbitos-git-sync</string>
+		<string>/Users/evander/codex/orbitos-automation/orbitos-git-sync.log</string>
+		<string>/Users/evander/codex/orbitos-automation/orbitos-git-sync.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/evander/codex/orbitos-automation/orbitos-git-sync.launchd.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/evander/codex/orbitos-automation/orbitos-git-sync.launchd.out.log</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
+</dict>
+</plist>

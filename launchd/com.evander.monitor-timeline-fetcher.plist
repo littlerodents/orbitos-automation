@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.evander.monitor-timeline-fetcher</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/evander/codex/orbitos-automation/run-with-alert.sh</string>
+		<string>monitor-timeline-fetcher</string>
+		<string>/Users/evander/codex/orbitos-automation/monitor-timeline-fetcher.out.log</string>
+		<string>/usr/local/bin/node</string>
+		<string>/Users/evander/codex/orbitos-automation/monitor-timeline-fetcher.mjs</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/evander/codex/orbitos-automation/monitor-timeline-fetcher.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/evander/codex/orbitos-automation/monitor-timeline-fetcher.out.log</string>
+	<key>StartInterval</key>
+	<integer>3600</integer>
+</dict>
+</plist>

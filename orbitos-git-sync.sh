@@ -62,3 +62,8 @@ fi
 if [ -n "$(git -C "$VAULT" stash list 2>/dev/null)" ]; then
   log "WARNING: stash 非空（可能是 autostash 未恢复）：$(git -C "$VAULT" stash list | head -1)——请人工检查 git stash pop"
 fi
+
+# 自动化守护：关键任务掉线/被删时自愈（2026-09-21 误删事件后加，5 分钟内恢复）
+if [ -x "/Users/evander/Labs/codex/orbitos-automation/ensure-jobs.sh" ]; then
+  /Users/evander/Labs/codex/orbitos-automation/ensure-jobs.sh
+fi
