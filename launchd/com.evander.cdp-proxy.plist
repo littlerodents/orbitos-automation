@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.evander.cdp-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/opt/node@22/bin/node</string>
+        <string>/Users/evander/.claude/skills/web-access/scripts/cdp-proxy.mjs</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CHROME_DEBUG_PORT</key>
+        <string>9222</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/evander/Labs/codex/orbitos-automation/cdp-proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/evander/Labs/codex/orbitos-automation/cdp-proxy.err.log</string>
+</dict>
+</plist>
