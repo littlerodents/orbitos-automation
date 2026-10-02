@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.evander.orbitos-learning-fetcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/opt/node@22/bin/node</string>
+        <string>/Users/evander/Labs/codex/orbitos-automation/learning-fetcher.mjs</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>50</integer></dict>
+    </array>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/evander/Labs/codex/orbitos-automation/learning-fetcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/evander/Labs/codex/orbitos-automation/learning-fetcher.err.log</string>
+</dict>
+</plist>

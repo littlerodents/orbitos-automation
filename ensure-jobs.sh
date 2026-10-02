@@ -17,7 +17,9 @@ JOBS=(
   com.evander.orbitos-brief-push-v2
   com.evander.orbitos-bookmark-organizer
   com.evander.orbitos-git-sync
-  com.evander.monitor-timeline-fetcher
+  com.evander.orbitos-monitor-timeline-fetcher
+  com.evander.orbitos-learning-fetcher
+  com.evander.orbitos-evening-reminder
   com.evander.cdp-proxy
   com.evander.chrome-x-automation
 )
@@ -62,5 +64,34 @@ print(c.get('lark_cli_path',''), c.get('feishu_user_id',''))
         --markdown "🔧 自动化守护已自愈：$ACTED（详见 ensure-jobs.log）" >/dev/null 2>&1 \
         && echo "$TODAY" > "$GUARD_STATE/last-dm"
     fi
+  fi
+fi
+
+# ---- 日报兜底（2026-10-02 教训：单次触发+网络抖动=静默漏发三天） ----
+# 过了 11:35 还没有今天的 brief 文件 → 补跑（经 run-with-alert，连败两次飞书告警）。
+# 每 5 分钟随 git-sync 检查；跑成功后文件存在，自然退出。
+NODE_BIN="/opt/homebrew/opt/node@22/bin/node"
+BRIEF_SCRIPT="/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.mjs"
+BRIEF_LOG="/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.log"
+TODAY_STR=$(TZ=Asia/Shanghai date '+%F')
+BRIEF_FILE="$HOME/Obsidian/OrbitOS/00_Inbox/brief-$TODAY_STR.md"
+HOUR_NOW=$(TZ=Asia/Shanghai date '+%H')
+MIN_NOW=$(TZ=Asia/Shanghai date '+%M')
+LOCK_DIR="/tmp/orbitos-brief-catchup.lock"
+
+if [ "$HOUR_NOW" -gt 11 ] || { [ "$HOUR_NOW" -eq 11 ] && [ "$MIN_NOW" -ge 35 ]; }; then
+  if [ ! -f "$BRIEF_FILE" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
+    {
+      trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      echo "[$(date '+%F %T')] catchup: brief for $TODAY_STR missing, running" >> "$BRIEF_LOG"
+      /Users/evander/Labs/codex/orbitos-automation/run-with-alert.sh \
+        "daily-brief-catchup" "$BRIEF_LOG" \
+        "$NODE_BIN" "$BRIEF_SCRIPT"
+      if [ -f "$BRIEF_FILE" ]; then
+        echo "[$(date '+%F %T')] catchup: brief for $TODAY_STR generated OK" >> "$BRIEF_LOG"
+        rmdir "$LOCK_DIR" 2>/dev/null
+        trap - EXIT
+      fi
+    } &
   fi
 fi

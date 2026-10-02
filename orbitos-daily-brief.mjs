@@ -108,12 +108,17 @@ function gatherInputs() {
     .map(x => `--- ${x.f} ---\n${readHead(x.p, 1200)}`);
 
   // 3. 行动表（飞书追踪表，唯一权威；卡龄降序 = 最老的最优先）
-  const actions = actionsFromTracker()
-    .filter(a => a.status === "未动" || a.status === "进行中")
+  const allActions = actionsFromTracker();
+  const actions = allActions.filter(a => a.status === "未动" || a.status === "进行中")
+    .filter(a => !a.text.startsWith("[学习·"))
     .sort((a, b) => b.age - a.age);
-  const doneN = actionsFromTracker().filter(a => a.status === "已完成").length;
+  const learningActions = allActions.filter(a => a.text.startsWith("[学习·"));
+  const doneN = allActions.filter(a => a.status === "已完成").length;
   const actionLines = actions.slice(0, 6)
     .map(a => `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天] ${a.text}\n  依据: ${(a.rationale || "（未记录——在飞书表'为什么这么做'列补上）").replace(/\n/g, " ⏎ ")}`)
+    .join("\n");
+  const learningLines = learningActions
+    .map(a => `- ${a.text}`)
     .join("\n");
 
   // 4. 活跃项目名
@@ -133,7 +138,7 @@ function gatherInputs() {
     pendingBookmarks = readdirSync(matsDir).filter(f => f.endsWith(".md") && !readHead(join(matsDir, f), 400).includes("processed:")).length;
   }
 
-  return { dateStr, bookmarkNotes, selectedNotes, actionLines, doneN, projects, pendingBookmarks };
+  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks };
 }
 
 const SYSTEM = `你是 Evander 的 vault 思考伙伴。为 OrbitOS 写${weekly ? "周报" : "日报"}。不要拒绝，不要解释你是谁，直接写正文。
@@ -148,7 +153,9 @@ OrbitOS 是极简系统：飞书是提醒面，Obsidian 存精选。他在意的
 3. **最优吗**：如果有更优路径或已对比过的替代方案，直说；没有就不编。
 4. **时间账**：花几分钟 vs 已经卡了多少天；若沉没成本已超收益（价值衰减、窗口过期），直接建议把状态改「已放弃」——放弃也是完成决策，不要为了催而催。
 ## 学习增量
-${weekly ? "本周" : "昨日"}书签整理/研究笔记里最值得精读的 ≤3 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
+${weekly ? "本周" : "今日"}三线学习清单（直接照着读，每条带原文链接和分钟数）：
+${learningLines || "（今日学习行动未生成——见行动追踪表）"}
+另外可补充书签整理/研究笔记里最值得精读的 ≤2 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
 ## CONNECTIONS
 书签/研究/项目之间 ≤3 个真实连接，用 [[wikilink]]。不足 3 个就诚实说。
 ## PATTERN
@@ -167,8 +174,11 @@ async function main() {
 未处理书签积压: ${inp.pendingBookmarks} 条
 行动完成度: ${inp.doneN} 项已完成
 
-### 行动表（按卡龄降序，前 8）
+### 行动表（按卡龄降序，前 6）
 ${inp.actionLines || "（空）"}
+
+### 今日学习行动（三线：Agent / PG / 独立开发）
+${inp.learningLines || "（未生成）"}
 
 ### 最近书签整理产物
 ${inp.bookmarkNotes.join("\n\n") || "（无新增）"}
@@ -209,6 +219,12 @@ ${inp.selectedNotes.join("\n\n") || "（无新增）"}
     writeFileSync(join(VAULT, "Today.md"), todayMd);
     commit(join(VAULT, "Today.md"), `chore: today hub update ${inp.dateStr}`);
   }
+
+  // 学习行动生成（三线各一条，进飞书行动表）——先于 tracker，让行动完成计数包含它们
+  try {
+    const here = new URL(".", import.meta.url).pathname;
+    execSync(`/opt/homebrew/opt/node@22/bin/node learning-actions.mjs`, { cwd: here, encoding: "utf8", stdio: "pipe" });
+  } catch (e) { console.error(`learning actions failed: ${String(e.message).slice(0, 200)}`); }
 
   // 追踪表同步（每日行 / 周复盘行 + 状态回同步）
   // launchd 环境无 PATH，node/lark-cli 都必须绝对路径
