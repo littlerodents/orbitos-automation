@@ -71,7 +71,7 @@ function pickAgent() {
 function pgProgress() {
   try { return JSON.parse(readFileSync(PG_STATE, "utf8")); } catch { return { currentIdx: 0, startedOn: null, finished: [] }; }
 }
-function pickPg() {
+function pickPg(allRows) {
   const cache = (() => { try { return JSON.parse(readFileSync(CACHE, "utf8")); } catch { return { pg: { queue: [] } }; }; })();
   const queue = cache.pg?.queue || [];
   if (!queue.length) return null;
@@ -87,7 +87,21 @@ function pickPg() {
     }
     st.startedOn = todayStr;
     st.finishedThisWeek = false;
+    st.finished = (st.finished || []).filter(t => t.week === todayStr.slice(0, 7));
   }
+  // 用户节奏可能快于"每周一篇"：当前篇已勾"已完成" → 立即推进下一篇（每周封顶 2 篇，用户定的节奏）
+  const weekKey = todayStr.slice(0, 7);
+  st.finished = (st.finished || []).filter(t => t.week === weekKey);
+  let cur = queue[st.currentIdx];
+  while (cur && allRows.some(r => s(r.状态) === "已完成" && s(r.行动).includes(`《${cur.title}》`)) && !st.finished.some(t => t.title === cur.title)) {
+    st.finished.push({ title: cur.title, week: weekKey });
+    if (st.finished.length >= 2) break; // 本周 2 篇已满
+    st.currentIdx = Math.min(st.currentIdx + 1, queue.length - 1);
+    st.finishedThisWeek = true;
+    st.startedOn = todayStr;
+    cur = queue[st.currentIdx];
+  }
+  if (st.finished.length >= 2 && allRows.some(r => s(r.状态) === "已完成" && s(r.行动).includes(`《${queue[st.currentIdx].title}》`))) return null; // 本周额度用完
   const essay = queue[st.currentIdx];
   writeFileSync(PG_STATE, JSON.stringify(st, null, 1));
   return { 行动: `[学习·PG] 本周精读：《${essay.title}》（${essay.url}）→ 读完写 3 句话笔记存 40_Wiki`, 状态: ["未动"], 开始卡于: Date.now(), 为什么这么做: `为什么：三线学习流·Paul Graham 线——每周 1-2 篇精读（你定的节奏），队列第 ${st.currentIdx + 1}/${queue.length} 篇。\n最优性：精选入门队列（从短到长），读完进 40_Wiki 变成可复用知识。\n时间账：每天读一节 15-20 分钟；读完把本条改已完成。` };
@@ -128,7 +142,7 @@ async function main() {
   const todayLearn = rows.filter(r => s(r.行动).startsWith("[学习·") && dstr(r.开始卡于) === todayStr);
   const have = new Set(todayLearn.map(r => s(r.行动).match(/^\[学习·([^\]]+)\]/)?.[1]));
   const creates = [];
-  for (const [line, item] of [["Agent", pickAgent()], ["PG", pickPg()], ["独立开发", pickDev()]]) {
+  for (const [line, item] of [["Agent", pickAgent()], ["PG", pickPg(rows)], ["独立开发", pickDev()]]) {
     if (item && !have.has(line)) creates.push(item);
   }
   batchCreate(creates);
