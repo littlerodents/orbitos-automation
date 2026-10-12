@@ -1,10 +1,10 @@
 {
-  "lastRunAt": "2026-10-12T07:08:30.832Z",
-  "lastRunAction": "promote",
+  "lastRunAt": "2026-10-12T08:51:17.987Z",
+  "lastRunAction": "reconcile-records",
   "lastRunOk": true,
   "lastErrorAt": null,
   "lastErrorAction": null,
   "lastError": null,
-  "lastSuccessAt": "2026-10-12T07:08:30.832Z",
-  "lastSuccessAction": "promote"
+  "lastSuccessAt": "2026-10-12T08:51:17.987Z",
+  "lastSuccessAction": "reconcile-records"
 }

@@ -14,8 +14,9 @@ import {
   deriveDisplayFields,
   inferRecord,
   isTransientLarkError,
-  readwiseInMainView,
   parseFrontmatter,
+  sameCellValue,
+  readwiseInMainView,
   shouldPromote,
   sourcePathFromFields,
   viewDefinitions,
@@ -456,4 +457,14 @@ test("buildPromotionMarkdown adds v2.1 rating and wikilink seeds without user wo
   assert.match(markdown, /- Topics: \[\[PAI\]\], \[\[AI\]\], \[\[Writing\]\]/);
   assert.match(markdown, /- Projects: \[\[OrbitOS\]\]/);
   assert.match(markdown, /- Related: \[\[OrbitOS\]\], \[\[PAI\]\], \[\[AI\]\]/);
+});
+
+test("sameCellValue treats ISO and local datetime as the same instant", () => {
+  assert.equal(sameCellValue("2026-05-11T08:00:00.000+08:00", "2026-05-11 08:00:00"), true);
+  assert.equal(sameCellValue({ text: "2026-05-11T08:00:00.000+08:00" }, "2026-05-11 08:00:00"), true);
+  assert.equal(sameCellValue("2026-05-11T08:00:00.000+08:00", "2026-05-11 09:00:00"), false);
+  assert.equal(sameCellValue("2026-05-11", "2026-05-11"), true);
+  assert.equal(sameCellValue("2026-05-11", "2026-05-12"), false);
+  assert.equal(sameCellValue("plain text", "plain text"), true);
+  assert.equal(sameCellValue("plain text", "other text"), false);
 });

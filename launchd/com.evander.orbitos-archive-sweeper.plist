@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.evander.orbitos-archive-sweeper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/evander/Labs/codex/orbitos-automation/run-with-alert.sh</string>
+		<string>archive-sweeper</string>
+		<string>/Users/evander/Labs/codex/orbitos-automation/archive-sweeper.out.log</string>
+		<string>/opt/homebrew/opt/node@22/bin/node</string>
+		<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-archive-sweeper.mjs</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/Users/evander/Labs/codex/orbitos-automation/archive-sweeper.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/evander/Labs/codex/orbitos-automation/archive-sweeper.err.log</string>
+</dict>
+</plist>

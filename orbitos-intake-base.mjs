@@ -1289,7 +1289,22 @@ function sameCellValue(actual, desired) {
   if (/^https?:\/\//i.test(String(desired))) {
     actualText = actualText.match(/^\[[^\]]*]\((https?:\/\/[^)]+)\)$/i)?.[1] || actualText;
   }
-  return actualText === String(desired);
+  const desiredText = String(desired);
+  if (actualText === desiredText) return true;
+  // 日期时间：Base 存 ISO（2026-05-11T08:00:00.000+08:00），本地算出的是
+  // "YYYY-MM-DD HH:mm:ss"（Asia/Shanghai）——按时刻比较，避免每轮把全部行判成 diff。
+  const actualEpoch = dateTimeEpoch(actualText);
+  const desiredEpoch = dateTimeEpoch(desiredText);
+  return actualEpoch !== null && desiredEpoch !== null && actualEpoch === desiredEpoch;
+}
+
+function dateTimeEpoch(text) {
+  const t = String(text).trim();
+  if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(\.\d+)?([+-]\d{2}:?\d{2}|Z)?$/.test(t)) return null;
+  let normalized = t.replace(" ", "T");
+  if (!/[+-]\d{2}:?\d{2}$|Z$/i.test(normalized)) normalized += "+08:00";
+  const epoch = Date.parse(normalized);
+  return Number.isFinite(epoch) ? epoch : null;
 }
 
 function needsRecordUpdate(fields, payload) {
@@ -1810,6 +1825,7 @@ export {
 	  parseFrontmatter,
 	  readwiseInMainView,
 	  refreshDerived,
+	  sameCellValue,
 	  shouldPromote,
 	  sourcePathFromFields,
 	  sourceFiles,
