@@ -17,9 +17,10 @@ JOBS=(
   com.evander.orbitos-brief-push-v2
   com.evander.orbitos-bookmark-organizer
   com.evander.orbitos-git-sync
-  com.evander.orbitos-monitor-timeline-fetcher
+  com.evander.monitor-timeline-fetcher
   com.evander.orbitos-learning-fetcher
   com.evander.orbitos-evening-reminder
+  com.evander.orbitos-archive-sweeper
   com.evander.cdp-proxy
   com.evander.chrome-x-automation
 )

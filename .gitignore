@@ -9,3 +9,6 @@ orbitos-git-sync.log
 orbitos-intake-loop.log
 orbitos-youmind-sync.log
 config.json
+
+# 生命周期证据（含 vault 私有内容，仅本地保留）
+evidence/
