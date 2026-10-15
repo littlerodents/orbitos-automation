@@ -6,6 +6,7 @@ import {
   fetchItemsForBoard,
   isTransientYouMindError,
   numberArg,
+  preserveLocalFrontmatter,
   selectBoardFiles,
   shouldReplaceCapture,
 } from "../youmind-sync.mjs";
@@ -99,4 +100,37 @@ Full article body with several paragraphs...
   assert.equal(shouldReplaceCapture(rich, truncated), false);
   assert.equal(shouldReplaceCapture(rich, richer), true);
   assert.equal(shouldReplaceCapture(rich, rich), false);
+});
+
+test("replacement keeps local-only frontmatter annotations (processed marks survive sync)", () => {
+  const existing = `---
+source: youmind
+youmind_id: "abc"
+processed: "2026-10-02"
+processed_into: "[[bookmarks-2026-09-29]]"
+---
+# Title
+## Content
+Body text
+`;
+  const candidate = `---
+source: youmind
+youmind_id: "abc"
+---
+# Title
+## Content
+Body text with an update from the API.
+`;
+
+  const merged = preserveLocalFrontmatter(existing, candidate);
+  assert.match(merged, /^processed: "2026-10-02"$/m);
+  assert.match(merged, /^processed_into: "\[\[bookmarks-2026-09-29\]\]"$/m);
+  assert.match(merged, /Body text with an update from the API\./);
+  assert.equal(preserveLocalFrontmatter(merged, candidate), merged, "merge is idempotent");
+
+  // 远端新增字段不会被丢掉
+  const candidateExtra = candidate.replace('youmind_id: "abc"', 'youmind_id: "abc"\nupdated: "2026-10-15T00:00:00Z"');
+  const mergedExtra = preserveLocalFrontmatter(existing, candidateExtra);
+  assert.match(mergedExtra, /^updated: "2026-10-15T00:00:00Z"$/m);
+  assert.match(mergedExtra, /^processed: "2026-10-02"$/m);
 });

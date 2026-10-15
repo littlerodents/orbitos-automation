@@ -63,13 +63,15 @@ All agent logic modules use dependency injection — external calls (GitHub API,
 - **Tab signals**: Open X tabs signal active interest → engagement threshold drops from 100 to 5
 - **Flow**: Read timeline cache → Filter by engagement + tab signals → Dedup by author (max 2) → DeepSeek increment → Write monitor-{date}-{period}.md
 
-## Lifecycle Sweeper（减量机制，2026-10-12）
+## Lifecycle Sweeper（减量机制，2026-10-12 起 · 2026-10-15 全自动）
 
-- `orbitos-archive-sweeper.mjs`（launchd `com.evander.orbitos-archive-sweeper`，每天 04:30）
-  - Materials：frontmatter `processed` ≥30 天 → `99_System/Archives/X书签简报/YYYY/MM/`
+- `orbitos-intake-loop.sh` 每轮（10 分钟）自动跑 `reconcile-records` + `orbitos-archive-sweeper.mjs sweep`：
+  - Materials：frontmatter `processed` ≥7 天 → `99_System/Archives/X书签简报/YYYY/MM/`
   - Selected：`bookmarks-*.md` 只保留最新 12 批，更旧 → `99_System/Archives/Selected/YYYY/`
   - 只移不删；目标重名 → 跳过并计数；自带 git 提交（`--no-git` 可关）
-- `orbitos-intake-loop.sh` 每轮（10 分钟）追加 `reconcile-records`：源文件已消失/被新版本替代的 Intake Base 行自动 archived
+  - `reconcile-records`：源文件已消失/被新版本替代的 Intake Base 行自动 archived
+- `com.evander.orbitos-archive-sweeper` 每天 04:30 独立再跑一轮（双保险）
+- `youmind-sync` 替换内容时保留本地 frontmatter 标注（`processed` 等不再被上游同步洗掉）
 - 手动：`node orbitos-archive-sweeper.mjs [sweep|collect-x-to-markdown|backfill-marks] --dry-run`
 
 ## Brief Push (Feishu DM delivery)

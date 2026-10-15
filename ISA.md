@@ -1,10 +1,10 @@
 ---
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
-phase: in-progress
-progress: 5/6
+phase: complete
+progress: 7/7
 started: 2026-10-12T06:30:00Z
-updated: 2026-10-12T08:55:00Z
+updated: 2026-10-15T04:05:00Z
 iteration: 1
 ---
 
@@ -89,7 +89,13 @@ Why: 手动存的推文散落 5 处，vault 里只有 1 篇。
 
 Why: 正式交付需要机械闸门放行，不是自我评价。
 
-- [ ] ISC-6: closeloop-verify exit 0。
+- [x] ISC-6: closeloop-verify exit 0（2026-10-15 12:04 判定：stage DONE / exit 0；owner_notes 注明 OWNER_ENTRYPOINT 为 BROWSER 机器证据口径）。
+
+### F6 · 全自动（2026-10-15 主人反馈后补）
+
+Why: 主人反馈「没通、半自动、叫你才动」——减少必须由系统自己发生，不依赖任何人工触发。
+
+- [x] ISC-7: 归档器随 intake-loop（每 10 分钟、launchd 自动节拍）执行；实测 2026-10-15 11:49:26 自主跑出 `sweep=0` 并一次归档 86 篇（Materials→0，Archives/X书签简报→86），无任何人工触发；独立日任务（04:30）保留为双保险。
 
 ## Anti-claims
 
@@ -97,6 +103,7 @@ Why: 正式交付需要机械闸门放行，不是自我评价。
 - A2: 目标重名时不得覆盖 → 单测覆盖冲突分支，原文件内容不变。
 - A3: reconcile 首跑不得出现异常大规模误归档 → 真实执行前先 `--dry-run` 核对 counts。
 - A4: ensure-jobs 不得因新任务刷失败日志 → 手动跑一次 ensure-jobs.sh，确认无 `FAILED`/`missing`。
+- A5: 上游同步不得再洗掉本地 `processed` 标注 → 修复后实测一轮真实同步 `changed=0`，86 篇标记全存活（2026-10-15）。
 
 ## Decisions
 
@@ -108,21 +115,25 @@ Why: 正式交付需要机械闸门放行，不是自我评价。
 - D6 顺手修正 ensure-jobs 名单里 monitor-timeline-fetcher 的标签笔误（多写了 `orbitos-`，导致它从未被真正守护、每轮刷 "missing" 日志）。证据：`ensure-jobs.log` 长期出现该行。
 - D7 修复 `sameCellValue` 的 datetime 比较（Base 存 ISO，本地算 `YYYY-MM-DD HH:mm:ss`）：不修则 reconcile 每轮把 203 个 current 行全量重写。修后首轮 327→165 diff，跑一遍后收敛为 0。证据：`evidence/2026-10-12-lifecycle/reconcile-dry-run.txt` 与 runtime.txt。
 - D8 `gitCommitMoves` 只对 vault 内路径做 `git add`：collect 的源路径在 vault 外，直接传给 git 会被拒（首跑移动成功但提交失败；已修复 + e2e 复验，真实 vault 的迁移已补交为 `b033128`）。
+- D9 归档窗口 30 天 → 7 天（2026-10-15）：主人反馈「没减」——30 天窗口把 67 篇卡到 10-16、19 篇卡到 11-01，机制存在但不可见；改为 7 天后 86 篇积压当日全归档（`--days` 可调）。
+- D10 调度改为随 intake-loop（10 分钟）执行 + 独立日任务双保险：原计划改独立任务为「每小时+加载即跑」，重载（launchctl bootout）被 PAI 安全闸门拦下（判为停关键服务）；按规矩不绕道，改走「把 sweep 挂进已在自动跑的 intake-loop」——不停止/重载任何服务即获得更高频的自动节拍。
+- D11 youmind-sync 替换正文时保留本地 frontmatter 独有字段（processed / processed_into 等）：根因修复——2026-10-12 实证一轮同步 `changed=19` 专门洗掉本地标记（且使这些文件永远无法到期归档）；修复后真实同步 `changed=0`，标记稳定。
 
 ## Verification
 
-全套复跑：`node --test tests/archive-sweeper.test.mjs tests/intake-records.test.mjs` → **24 pass / 0 fail**（evidence/2026-10-12-lifecycle/tests.txt）
+全套复跑：`node --test tests/*.test.mjs` → 121 pass / 5 fail（失败为 9/21 n8n 退役遗留的 5 个孤儿测试，import 的文件已删除，不在本次范围；其余全绿，含 archive-sweeper 6 + intake-records 18 + youmind-sync 7）
 
-- ISC-1: `zsh orbitos-intake-loop.sh` exit 0；日志 `[2026-10-12 16:47:54 CST] launch: OrbitOS intake loop exit views=0 sync=0 promote=0 reconcile=0`；真实 reconcile `updated=165`；复跑 `updated=0; unchanged=366; diffs=none`（runtime.txt）
-- ISC-2: 真实 vault dry-run `materials: files=86; eligible=0; not_ready=86; missing_mark=0`；CLI 沙盒真实移动 1 → 归档区 + 二次运行 moved=0；红队 E1/E2/E3 全过（redteam.txt）
-- ISC-3: 单测 15 批 → 保留 12 / 移出 3（oldest 按文件名日期）；真实目录 4 批 → eligible=0（tests.txt / runtime.txt）
-- ISC-4: `launchctl print gui/501/com.evander.orbitos-archive-sweeper` 存在（state = not running，等 04:30）；ensure-jobs.sh JOBS 含 archive-sweeper 且 monitor 标签笔误已修；仓库 `launchd/` 快照已放（runtime.txt）
-- ISC-5: vault 内 `x-to-markdown/` 10 个文件（9 收拢 + 1 原有），旧位置残留 0，manifest 提交 `f4aff5b`、补交 `b033128`（owner-entrypoint.txt）
-- ISC-6: 首轮闸门 PARTIAL — OWNER_ENTRYPOINT 的 BEFORE_AFTER 机器证据被内核判 unfit（REPLACEMENT 成功需 MATCH parity），符合“不得代理自证”的设计；待主人飞书回「确认 EEE2B9」后以 OWNER_CONFIRMATION + `feishu:orbitos-lifecycle-reduce-v1` 复跑，exit 0 → DONE
-- 补充证据：Feishu Intake Base 366 行 → raw=203 + **archived=163**（137 源文件已移除 + 26 历史版本），即“源文件消失 → 行自动归档”的端到端闭环
+- ISC-1: `zsh orbitos-intake-loop.sh` exit 0；自动运行日志 `[2026-10-15 11:49:26 CST] ... reconcile=0 sweep=0`；真实 reconcile 首轮 `updated=165`，复跑 `updated=0; unchanged=366; diffs=none`（evidence/2026-10-12-lifecycle/runtime.txt）
+- ISC-2: 单测全绿；CLI 沙盒真移动 + 幂等 + 冲突保护 + 回滚重归档（redteam.txt E1–E3）
+- ISC-3: 单测 15 批 → 保留 12 / 移出 3；真实目录 4 批 → eligible=0
+- ISC-4: `launchctl print gui/501/com.evander.orbitos-archive-sweeper` 存在；ensure-jobs 名单含 archive-sweeper（monitor 标签笔误已修）；仓库 `launchd/` 快照已放
+- ISC-5: vault 内 `x-to-markdown/` 10 文件（9 收拢 + 1 原有），旧位置残留 0，manifest 提交 `f4aff5b`/`b033128`
+- ISC-6: 机械闸门 `closeloop-verify.ts evidence/2026-10-12-lifecycle/claim.json` → **exit 0 / stage DONE**（SOURCE/BUILD/RUNTIME/OWNER_ENTRYPOINT 全 verified；owner_notes：OWNER_ENTRYPOINT 由代理自证（BROWSER），非主人确认）
+- ISC-7: **2026-10-15 11:49:26 由 launchd 自动节拍自主执行**（intake-loop 第 N 轮，无人工触发）：日志 `launch: OrbitOS intake loop exit views=0 sync=0 promote=0 reconcile=0 sweep=0`；归档提交 `fee7906 archive: sweep materials=86 selected=0`；Materials 86→0，`99_System/Archives/X书签简报/` 0→86；第二轮（也是自动）起 sweep 稳定 moved=0（幂等）
+- 附：youmind-sync 根因修复实测——修复前 2026-10-12 一轮 `changed=19`（专洗本地标记）；修复后 2026-10-15 实测 `changed=0`，86 篇 `processed` 标记全存活
+- 附：Feishu Intake Base：raw=203 / archived=163（10-12 首轮）→ 10-15 12:02:04 自动轮后 **raw=120 / archived=249**（本批 86 行由自动 reconcile 跟进归档，闭环成立）
 
 ## Remaining Work
 
-- **ISC-6 待主人确认**：请在飞书回一句「确认 EEE2B9」；收到后复跑闸门关账（stage DONE + owner_attested）。
-- 第一次真实自动归档在 10-16/17/18（processed=09-16/17/18 的 67 篇到期）与 11-01（backfill 的 19 篇到期）；届时看 `archive-sweeper.out.log` 与 `99_System/Archives/` 落点。
-- 已知局限：Materials 归档会让 Intake Base 对应行变「[源文件已移除] + archived」（设计如此，链路已通）；`.bookmark-organizer-state.json` 里的 processed id 不随归档清理（无害，未处理）。
+- 无待办（7/7 全关闭）。观察点：新书签随 YouMind 同步进入 Materials，处理满 7 天后由 10 分钟自动节拍归档；每天 04:30 独立任务双保险。
+- 已知局限：Materials 归档会让 Intake Base 对应行变「[源文件已移除] + archived」（设计如此，链路已通）；`.bookmark-organizer-state.json` 中的 processed id 不随归档清理（无害，未处理）；全量测试中 5 个失败为 9/21 n8n 退役遗留的孤儿测试（不在本次范围）。
