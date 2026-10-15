@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // orbitos-archive-sweeper — 内容生命周期"减少"机制（只移不删）
 //   sweep（默认）:
-//     Materials: frontmatter processed 满 N 天 → 99_System/Archives/X书签简报/<YYYY>/<MM>/
+//     Materials: frontmatter processed 满 N 天（默认 7）→ 99_System/Archives/X书签简报/<YYYY>/<MM>/
 //     Selected : bookmarks-*.md 只保留最新 K 批，更旧 → 99_System/Archives/Selected/<YYYY>/
 //   collect-x-to-markdown: 一次性，把散落在 ~ 下的 x-to-markdown 捕获收进 vault（留 manifest）
 //   backfill-marks: 一次性，给 state 已处理但 frontmatter 缺 processed 的 Materials 补标记
-// 手动: node orbitos-archive-sweeper.mjs [sweep|collect-x-to-markdown|backfill-marks] [--dry-run] [--days 30] [--keep 12] [--no-git]
-// 定时: com.evander.orbitos-archive-sweeper（每天 04:30，经 run-with-alert 告警）
+// 手动: node orbitos-archive-sweeper.mjs [sweep|collect-x-to-markdown|backfill-marks] [--dry-run] [--days 7] [--keep 12] [--no-git]
+// 定时: com.evander.orbitos-archive-sweeper（每小时 + 加载即跑，经 run-with-alert 告警）
 // 原则: 只移不删；目标重名 → 跳过并计数（绝不覆盖）；失败可见（计数 + 日志 + 告警链）。
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -210,7 +210,7 @@ async function main() {
   const command = args.find((a) => !a.startsWith("--")) || "sweep";
   const dryRun = args.includes("--dry-run");
   const git = !args.includes("--no-git");
-  const days = numberFlag(args, "--days", 30);
+  const days = numberFlag(args, "--days", 7);
   const keep = numberFlag(args, "--keep", 12);
   const nowMs = Date.now();
 
@@ -269,7 +269,7 @@ async function main() {
     return;
   }
 
-  process.stderr.write(`unknown command: ${command}\nusage: orbitos-archive-sweeper.mjs [sweep|collect-x-to-markdown|backfill-marks] [--dry-run] [--days 30] [--keep 12] [--no-git]\n`);
+  process.stderr.write(`unknown command: ${command}\nusage: orbitos-archive-sweeper.mjs [sweep|collect-x-to-markdown|backfill-marks] [--dry-run] [--days 7] [--keep 12] [--no-git]\n`);
   process.exitCode = 2;
 }
 

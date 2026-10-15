@@ -281,6 +281,32 @@ function captureBody(markdown) {
   return (index >= 0 ? String(markdown).slice(index + marker.length) : String(markdown || "")).trim();
 }
 
+function frontmatterParts(markdown) {
+  const match = String(markdown || "").match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  return { block: match[0], body: match[1] };
+}
+
+// 上游替换正文时，保留本地独有的 frontmatter 字段（如 bookmark-organizer 写的
+// processed / processed_into）。2026-10-12 实证：不保留的话本地标注会在下一轮同步被冲掉
+// （19 篇 Materials 的 processed 标记在 9 分钟内被远程版本覆盖）。
+function preserveLocalFrontmatter(existing, candidate) {
+  const oldFm = frontmatterParts(existing);
+  const newFm = frontmatterParts(candidate);
+  if (!oldFm || !newFm) return candidate;
+  const newKeys = new Set(
+    newFm.body.split("\n").map((line) => line.match(/^([A-Za-z0-9_-]+):/)?.[1]).filter(Boolean),
+  );
+  const extras = oldFm.body
+    .split("\n")
+    .filter((line) => {
+      const key = line.match(/^([A-Za-z0-9_-]+):/)?.[1];
+      return key && !newKeys.has(key);
+    });
+  if (extras.length === 0) return candidate;
+  return `---\n${newFm.body}\n${extras.join("\n")}\n---${candidate.slice(newFm.block.length)}`;
+}
+
 function shouldReplaceCapture(existing, candidate) {
   if (existing === candidate) return false;
   const existingBody = captureBody(existing);
@@ -294,6 +320,14 @@ function writeCapture(file, content) {
     const existing = readFileSync(file, "utf8");
     if (existing === content) return { changed: false, preserved: false };
     if (!shouldReplaceCapture(existing, content)) return { changed: false, preserved: true };
+    const merged = preserveLocalFrontmatter(existing, content);
+    if (merged === existing) return { changed: false, preserved: false };
+    if (DRY_RUN) return { changed: true, preserved: false };
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, merged, "utf8");
+    renameSync(tmp, file);
+    return { changed: true, preserved: false };
   }
   if (DRY_RUN) return { changed: true, preserved: false };
   mkdirSync(path.dirname(file), { recursive: true });
@@ -458,6 +492,7 @@ export {
   fetchItemsForBoard,
   isTransientYouMindError,
   numberArg,
+  preserveLocalFrontmatter,
   selectBoardFiles,
   shouldReplaceCapture,
   targetPath,
