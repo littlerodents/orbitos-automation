@@ -7,11 +7,13 @@
 // 手动: node orbitos-daily-brief.mjs [--weekly]
 // 定时: com.evander.orbitos-daily-brief.plist（工作日 08:00）/ weekly（周日 10:00）
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { execSync, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
+import { gatherTrendingForBrief } from "./github-trending.mjs";
 
 const TRACKER_URL = "https://awvzqp87lyb.feishu.cn/base/LyUQbzSEPaGVmFs8ezScDyVhn1e";
 
@@ -56,6 +58,8 @@ const cfg = loadConfig();
 const DS_KEY = process.env.DEEPSEEK_API_KEY || cfg.deepseek_api_key || "";
 const VAULT = cfg.vault_path;
 const weekly = process.argv.includes("--weekly");
+// 2026-10-24 加：无副作用验证（不写 vault、不 commit、不调 tracker/飞书）
+const dryRun = process.argv.includes("--dry-run");
 
 async function withRetry(fn, attempts = 3, baseMs = 1000) {
   let lastErr;
@@ -95,7 +99,7 @@ function filesNewerThan(dir, days, filter = () => true) {
     .sort((a, b) => b.mtime - a.mtime);
 }
 
-function gatherInputs() {
+async function gatherInputs() {
   const today = new Date();
   const dateStr = today.toISOString().slice(0, 10);
 
@@ -138,7 +142,19 @@ function gatherInputs() {
     pendingBookmarks = readdirSync(matsDir).filter(f => f.endsWith(".md") && !readHead(join(matsDir, f), 400).includes("processed:")).length;
   }
 
-  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks };
+  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "" };
+}
+
+// 6. GitHub Trending（开发者工具风向）——单独异步取，失败不拖垮日报
+async function attachTrending(inp) {
+  if (weekly) return inp; // 周报不加（避免把"本周热门"当商业趋势）
+  try {
+    inp.trendingLines = await gatherTrendingForBrief({ today: inp.dateStr });
+  } catch (e) {
+    console.error(`trending failed (non-fatal): ${String(e.message || e).slice(0, 200)}`);
+    inp.trendingLines = "";
+  }
+  return inp;
 }
 
 const SYSTEM = `你是 Evander 的 vault 思考伙伴。为 OrbitOS 写${weekly ? "周报" : "日报"}。不要拒绝，不要解释你是谁，直接写正文。
@@ -157,12 +173,19 @@ ${weekly ? "本周" : "今日"}三线学习清单（直接照着读，每条带�
 另外可补充书签整理/研究笔记里最值得精读的 ≤2 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
 ## CONNECTIONS
 书签/研究/项目之间 ≤3 个真实连接，用 [[wikilink]]。不足 3 个就诚实说。
+## 工具风向
+只在这批 trending 里有**和你主线直接相关**的东西（skill/plugin/agent 基础设施）时写，≤3 行，每行：repo + 一句话为什么和你有关。
+硬规则：
+- 这是开发者工具榜，不是市场/生意信号 —— 禁止从它推导商业趋势、用户需求、SEO 机会。
+- 没有相关项就写「今日无相关」，不要硬凑；不要罗列排名；不要复述 star 数。
+- 不存在的项不要编。
 ## PATTERN
 一个正在变得清晰的偏好/模式，2-4 句。`;
 
 async function main() {
   if (!DS_KEY) { console.error("no deepseek key"); process.exit(1); }
-  const inp = gatherInputs();
+  const inp = await attachTrending(await gatherInputs());
+  if (dryRun) console.log(`[dry-run] trending lines: ${inp.trendingLines ? inp.trendingLines.split("\n").length + " 行" : "（空）"}`);
 
   if (!inp.bookmarkNotes.length && !inp.selectedNotes.length && weekly === false) {
     // 无新料也照发：行动提醒本身就是价值
@@ -185,6 +208,9 @@ ${inp.bookmarkNotes.join("\n\n") || "（无新增）"}
 ### 最近研究精选笔记
 ${inp.selectedNotes.join("\n\n") || "（无新增）"}
 
+### GitHub Trending（今日开发者工具榜；仅供判断工具生态，不是商业信号）
+${inp.trendingLines || "（未取到）"}
+
 写出${weekly ? "周报" : "日报"}正文（从 ## TL;DR 开始，不要自己加一级标题）。`;
 
   const resp = await callDeepSeek([
@@ -195,6 +221,16 @@ ${inp.selectedNotes.join("\n\n") || "（无新增）"}
   if (!body.startsWith("## TL;DR")) { console.error("LLM 输出格式异常，放弃:\n", body.slice(0, 300)); process.exit(1); }
 
   const tldr = body.match(/## TL;DR\n(.+)/)?.[1]?.trim() || "";
+
+  if (dryRun) {
+    console.log(`[dry-run] 将写入 ${weekly ? "10_Daily" : "00_Inbox"}；不落盘、不 commit、不调 tracker`);
+    console.log(`[dry-run] TL;DR: ${tldr}`);
+    console.log(`[dry-run] 正文 ${body.length} 字，含工具风向段: ${/## 工具风向/.test(body)}`);
+    if (/## 工具风向[\s\S]*?(?=\n## |$)/.test(body)) {
+      console.log("[dry-run] 工具风向段内容:\n" + body.match(/## 工具风向[\s\S]*?(?=\n## |$)/)[0]);
+    }
+    return;
+  }
 
   if (weekly) {
     // 周报写 10_Daily/weekly-W<ww>-<monday>.md
@@ -240,4 +276,8 @@ function commit(absPath, msg) {
   } catch (e) { console.error(`commit failed: ${e.message?.slice(0, 200)}`); }
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+// 只有直接运行才执行 main：被 import 时不得触发真实写 vault / commit / 推送
+const thisFile = fileURLToPath(import.meta.url);
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(thisFile)) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}

@@ -2,9 +2,9 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 7/7
+progress: 13/13
 started: 2026-10-12T06:30:00Z
-updated: 2026-10-15T04:05:00Z
+updated: 2026-10-24T16:00:00Z
 iteration: 1
 ---
 
@@ -137,3 +137,40 @@ Why: 主人反馈「没通、半自动、叫你才动」——减少必须由系
 
 - 无待办（7/7 全关闭）。观察点：新书签随 YouMind 同步进入 Materials，处理满 7 天后由 10 分钟自动节拍归档；每天 04:30 独立任务双保险。
 - 已知局限：Materials 归档会让 Intake Base 对应行变「[源文件已移除] + archived」（设计如此，链路已通）；`.bookmark-organizer-state.json` 中的 processed id 不随归档清理（无害，未处理）；全量测试中 5 个失败为 9/21 n8n 退役遗留的孤儿测试（不在本次范围）。
+
+---
+
+# 附：F7 · GitHub Trending → 日报（2026-10-24 增量）
+
+## Problem
+日报的输入全来自 vault 内部（书签/研究/行动），没有"外部工具生态在变什么"的信号。
+
+## Goal
+每天日报的 prompt 里带一份 GitHub Trending 快照 + 与上次相比的新上榜项；失败不影响日报主体。
+
+## Out of Scope
+不写 vault（快照只留 `~/.config/orbitos-automation/github-trending.json`）；不进周报；不做"趋势→商业判断"的推导。
+
+## Features
+- [x] ISC-8: `github-trending.mjs` 能真抓 daily/weekly 并解析出 repo/stars/gain/lang/desc（tests 7/7，真实抓取 10 条）。
+- [x] ISC-9: 首跑标"首次快照无对比基线"，次日按 firstSeen 标 `★新`，同日重跑标记稳定。
+- [x] ISC-10: 日报 prompt 含「GitHub Trending」段，SYSTEM 明确禁止把它当市场信号；无相关项时输出「今日无相关」。
+- [x] ISC-11: 抓取失败/HTML 变异 → 返回空、日报照常生成（红队 E1/E2 实证）。
+- [x] ISC-12: `orbitos-daily-brief.mjs --dry-run` 存在且无副作用（不写 vault/不 commit/不调 tracker）。
+- [x] ISC-13: `orbitos-daily-brief.mjs` 被 import 不再触发 main（真实事故回归，红队 E3 PASS）。
+
+## Decisions
+- D12 只进 prompt，不单独写 vault：trending 的价值在"变化"，落盘会变成只增不减的文件（与 lifecycle 机制相悖）。
+- D13 快照只保留 30 天内出现的 repo（pruneState），文件大小有上界。
+- D14 首跑不标"新上榜"：无基线就不假装有变化。
+- D15 周报不加 trending：周维度上"本周热门"无法区分工具热度与商业信号，容易误读。
+
+## Verification
+- 单测：`node --test tests/github-trending.test.mjs` → 7 pass；组合回归 38 pass（含 archive/intake/youmind）
+- 真实抓取：`node github-trending.mjs --no-cache` → daily 10 条，字段完整
+- 日报产物：`00_Inbox/brief-2026-10-24.md` 含「## 工具风向」3 条相关项（commit 5371a62）
+- 红队：E1 网络失败→空且不抛；E2 空/变异 HTML→[]；E3 import 不写 vault（真实事故回归）；E4 30 天清理生效
+
+## 事故记录（必须留痕）
+2026-10-24 23:48，我用 `node -e 'import("./orbitos-daily-brief.mjs")'` 做模块加载检查，因该文件当时缺少 import 守卫，直接执行了 main：真实写入并 commit 了 `brief-2026-10-24.md` 与 `Today.md`（bbd895f / a2915e5）。当晚该日 brief 原本不存在（当日未生成），因此不是覆盖主人的既有产物，但**确实产生了未预期的真实写入**。
+处置：补 import 守卫（本 ISA ISC-13），修完后重新生成一份含 trending 的正确版本（5371a62 / 25dd27b），并保留历史提交供审计。
