@@ -6,10 +6,11 @@
 // 手动: node bookmark-organizer.mjs [--limit 20] [--dry-run]
 // 定时: com.evander.orbitos-bookmark-organizer.plist（每 6 小时一批，积压自动消化）
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
 
 const cfg = loadConfig();
@@ -143,7 +144,11 @@ async function main() {
   }).join("\n\n");
 
   const strong = batch.filter(x => byId.get(x.file)?.signal === "strong").length;
-  const header = `---\ntype: selected-content\nsource: bookmark-organizer\ndate: ${today}\nstatus: unread\n---\n# X 书签整理 — ${today}\n\n> 本批 ${batch.length} 条 · strong ${strong} 条 · 主题分布: ${[...new Set(batch.map(x => byId.get(x.file)?.topic).filter(Boolean))].join(", ")}\n\n`;
+  const actionPlan = planBookmarkActions(batch, byId);
+  const actionNote = strong
+    ? ` · 进行动表 ${actionPlan.actions.length} 条${actionPlan.truncated ? `（另 ${actionPlan.truncated} 条仅存档，受每批 3 条上限）` : ""}`
+    : "";
+  const header = `---\ntype: selected-content\nsource: bookmark-organizer\ndate: ${today}\nstatus: unread\n---\n# X 书签整理 — ${today}\n\n> 本批 ${batch.length} 条 · strong ${strong} 条${actionNote} · 主题分布: ${[...new Set(batch.map(x => byId.get(x.file)?.topic).filter(Boolean))].join(", ")}\n\n`;
   const bodyText = header + sections + "\n";
 
   if (dryRun) { console.log(bodyText.slice(0, 2000)); return; }
@@ -167,24 +172,36 @@ async function main() {
   console.log(`done → ${outName} (${batch.length} bookmarks, strong=${strong})`);
 
   // strong 书签 → 飞书行动追踪表（学习增量直接算进行动）
-  try { pushBookmarkActions(batch, byId); } catch (e) { console.error(`feishu action push failed (non-fatal): ${e.message}`); }
+  try { pushBookmarkActions(actionPlan, { dryRun }); } catch (e) { console.error(`feishu action push failed (non-fatal): ${e.message}`); }
+}
+
+// 纯函数：决定本批哪些书签进行动表（可测，不碰网络）
+// C 方案（2026-10-24）：只保证“未来的 strong 必进表”，不改历史批次。
+export function planBookmarkActions(batch, byId, max = 3, now = Date.now()) {
+  const candidates = batch
+    .map(x => ({ x, a: byId.get(x.file) }))
+    .filter(({ a }) => a && a.signal === "strong" && a.actionable && a.essence);
+  const picked = candidates.slice(0, max);
+  return {
+    candidates: candidates.length,
+    truncated: Math.max(0, candidates.length - picked.length),
+    actions: picked.map(({ x, a }) => ({
+      行动: `精读：《${a.essence.replace(/。$/,"")}》→ ${a.actionable}（原文: ${x.fm?.url || "见原始捕获"}）`,
+      状态: ["未动"],
+      开始卡于: now,
+      为什么这么做: `为什么：${a.why || "与他主线相关的 strong 信号书签"}。\n最优性：经本批书签对比筛选为 strong（直接改变打法的资料）。\n时间账：${a.efficiency || "精读约 15-30 分钟，可复用到主线笔记"}。`,
+    })),
+  };
 }
 
 // 只推 strong 且带可做项的，每批最多 3 条防泛滥；文本必须具体到能直接动手
-function pushBookmarkActions(batch, byId) {
+// 超额部分不推也不再处理（源文件已标记 processed）→ 必须在产物与日志里明示，不假装还有下批
+function pushBookmarkActions(plan, { dryRun = false } = {}) {
+  if (!plan.actions.length) return console.log("no strong actionable bookmarks → no action rows");
+  if (dryRun) return console.log(`[dry-run] would push ${plan.actions.length} action(s); candidates=${plan.candidates} truncated=${plan.truncated}`);
   const T = JSON.parse(readFileSync(join(homedir(), ".config/orbitos-automation/tracker.config.json"), "utf8"));
   const SAFE_PATH = `/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`;
-  const actions = batch
-    .map(x => ({ x, a: byId.get(x.file) }))
-    .filter(({ a }) => a && a.signal === "strong" && a.actionable && a.essence)
-    .slice(0, 3)
-    .map(({ x, a }) => ({
-      行动: `精读：《${a.essence.replace(/。$/,"")}》→ ${a.actionable}（原文: ${x.fm?.url || "见原始捕获"}）`,
-      状态: ["未动"],
-      开始卡于: Date.now(),
-      为什么这么做: `为什么：${a.why || "与他主线相关的 strong 信号书签"}。\n最优性：经本批书签对比筛选为 strong（直接改变打法的资料）。\n时间账：${a.efficiency || "精读约 15-30 分钟，可复用到主线笔记"}。`,
-    }));
-  if (!actions.length) return console.log("no strong actionable bookmarks → no action rows");
+  const actions = plan.actions;
   const r = spawnSync(cfg.lark_cli_path, [
     "base", "+record-batch-create", "--base-token", T.base_token, "--table-id", T.action_table,
     "--as", "user", "--format", "json",
@@ -192,7 +209,10 @@ function pushBookmarkActions(batch, byId) {
   ], { encoding: "utf8", env: { ...process.env, PATH: `${SAFE_PATH}:${process.env.PATH || ""}` } });
   const out = JSON.parse(r.stdout || "{}");
   if (!out.ok) throw new Error(out.error?.message || "lark create failed");
-  console.log(`pushed ${actions.length} bookmark action(s) to Feishu tracker`);
+  console.log(`pushed ${actions.length} bookmark action(s) to Feishu tracker; candidates=${plan.candidates} archived_only=${plan.truncated}`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+const thisFile = fileURLToPath(import.meta.url);
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(thisFile)) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}

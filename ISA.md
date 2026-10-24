@@ -2,7 +2,7 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 16/16
+progress: 20/20
 started: 2026-10-12T06:30:00Z
 updated: 2026-10-24T16:00:00Z
 iteration: 1
@@ -210,3 +210,34 @@ Why: 主人反馈「没通、半自动、叫你才动」——减少必须由系
 ## Remaining Work
 - **未验证**：周报真实落盘与飞书送达。周日 10:00 自动轮首次生效；今天不真跑，避免与周日同周文件重复推送。
 - 若要"被拒绝次数"变成真指标，需要给行动表加「完成于」字段或一个手动记录入口——**需主人决定**。
+
+---
+
+# 附：F9 · 修复 strong → 行动表断点（C 方案：只修未来）
+
+## Problem
+Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精读：` 开头的是 **0 条**。
+
+## 根因（取证后修正了最初的假设）
+不是阈值太严，是**时间错位**：`pushBookmarkActions` 于 2026-09-18 12:06 加入；09-16/17 两批（15 条 strong）已在此前处理并打上 `processed` 标记，不会重跑；09-18 那批恰好 `strong=0`；此后 103 次运行全是 `nothing to process`（书签无新增）。
+
+## Features
+- [x] ISC-17: `planBookmarkActions()` 纯函数：strong + 非空 actionable 才生成行动，medium/weak 永不进表。
+- [x] ISC-18: 每批上限 3 条的**超额部分必须可见**：Selected 头部与日志都写明「另 N 条仅存档」，不得声称"下批再处理"（源文件已 processed，不会重来）。
+- [x] ISC-19: `--dry-run` 会打印 would-push 统计，不再静默跳过推送环节。
+- [x] ISC-20: `bookmark-organizer.mjs` 补 import 守卫（此前 import 会触发真实处理+推送）。
+
+## Decisions
+- D19 选 C（只修未来）：历史 19 条 strong 的补推需要一次显式操作，属于"造一批没人认领的行动"，不做。
+- D20 保留每批 3 条上限：追踪表已有 76 条、83% 是学习类，再灌 19 条只会让对外账更难看。上限不动，但把丢弃显性化。
+- D21 回放验证代替真跑：历史批次已 processed，无法重放真实链路；用 planBookmarkActions 对 Selected 原文回放，验证"本应产出 9 条"。
+
+## Verification
+- 单测 5 pass（含 medium/weak 被挡、无 actionable 不计数、超额计数、缺失分析不伪造）
+- 组合回归 49 pass
+- 回放：strong=19 / actionable=19 → 本应推 9 / 超额 10（与每批 3 条上限一致）
+- import 守卫：vault HEAD 未变、日志未增长
+
+## Remaining Work
+- **未验证**：真实新批次的推送（需等 YouMind 有新书签；当前已 30+ 天无新增）。
+- 可选（需主人决定）：一次性补推历史 9 条 strong 行动到追踪表。
