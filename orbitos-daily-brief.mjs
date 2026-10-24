@@ -125,6 +125,24 @@ async function gatherInputs() {
     .map(a => `- ${a.text}`)
     .join("\n");
 
+  // 3b. 对外账（反向指标，2026-10-24）：全部从追踪表实测，无数据源的一律标"未记录"
+  const OUTWARD_PREFIXES = ["【主线·分发】", "【主线·转化】", "【主线·产品】", "【主线·链路】"];
+  const outward = allActions.filter(a => OUTWARD_PREFIXES.some(p => a.text.startsWith(p)));
+  const outwardStuck = outward.filter(a => a.status === "未动" || a.status === "进行中");
+  const outwardDone = outward.filter(a => a.status === "已完成");
+  const outwardOldest = outwardStuck.slice().sort((a, b) => b.age - a.age)[0] || null;
+  const outwardAccount = {
+    total: allActions.length,
+    outwardTotal: outward.length,
+    outwardDone: outwardDone.length,
+    outwardStuck: outwardStuck.length,
+    learningTotal: learningActions.length,
+    oldestAge: outwardOldest?.age ?? 0,
+    oldestText: (outwardOldest?.text || "").slice(0, 60),
+    sharePct: allActions.length ? Math.round((outward.length / allActions.length) * 100) : 0,
+    learningPct: allActions.length ? Math.round((learningActions.length / allActions.length) * 100) : 0,
+  };
+
   // 4. 活跃项目名
   const projDir = join(VAULT, "20_Project");
   const projects = existsSync(projDir)
@@ -142,10 +160,17 @@ async function gatherInputs() {
     pendingBookmarks = readdirSync(matsDir).filter(f => f.endsWith(".md") && !readHead(join(matsDir, f), 400).includes("processed:")).length;
   }
 
-  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "" };
+  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "", outwardAccount };
 }
 
 // 6. GitHub Trending（开发者工具风向）——单独异步取，失败不拖垮日报
+// 对外账的机械注记：不依赖 LLM 是否听话，条件命中就由系统直接写进周报
+export function outwardAlertLine(a) {
+  if (!a || !a.total) return "";
+  if (!(a.outwardStuck >= 5 && a.oldestAge > 14)) return "";
+  return `> ⚠️ 系统实测（非模型判断）：对外动作 ${a.outwardStuck} 条未动，最久 ${a.oldestAge} 天；学习类占追踪表 ${a.learningPct}%。本周真正卡住的是对外动作。`;
+}
+
 async function attachTrending(inp) {
   if (weekly) return inp; // 周报不加（避免把"本周热门"当商业趋势）
   try {
@@ -173,13 +198,23 @@ ${weekly ? "本周" : "今日"}三线学习清单（直接照着读，每条带�
 另外可补充书签整理/研究笔记里最值得精读的 ≤2 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
 ## CONNECTIONS
 书签/研究/项目之间 ≤3 个真实连接，用 [[wikilink]]。不足 3 个就诚实说。
-## 工具风向
+${weekly ? `## 对外账
+用「对外账」区的实测数字回答一个问题：**这周我让谁看见了我？**
+必须包含：
+1. 对外动作在追踪表里的占比（用原数字，如 7/76=9%），对比学习类占比。
+2. 未动的对外动作几条、最久卡了几天、第一条是什么。
+3. 一行：\`被拒绝/被批评/被忽视：\` 后面只写「未记录（系统无数据源）」，**绝对禁止编造次数**。
+硬规则：
+- 数字只能引用「对外账」区给的值，不得推算或模糊化。
+- 如果未动的对外动作 ≥ 5 且最久 > 14 天，必须在 TL;DR 或本段第一句直说：本周真正卡住的是对外动作，不是学习。
+- 禁止安抚式措辞（「已经很努力」「方向是对的」「持续积累中」「别焦虑」）。只陈述事实与代价。
+` : ""}${weekly ? "" : `## 工具风向
 只在这批 trending 里有**和你主线直接相关**的东西（skill/plugin/agent 基础设施）时写，≤3 行，每行：repo + 一句话为什么和你有关。
 硬规则：
 - 这是开发者工具榜，不是市场/生意信号 —— 禁止从它推导商业趋势、用户需求、SEO 机会。
 - 没有相关项就写「今日无相关」，不要硬凑；不要罗列排名；不要复述 star 数。
 - 不存在的项不要编。
-## PATTERN
+`}## PATTERN
 一个正在变得清晰的偏好/模式，2-4 句。`;
 
 async function main() {
@@ -207,7 +242,14 @@ ${inp.bookmarkNotes.join("\n\n") || "（无新增）"}
 
 ### 最近研究精选笔记
 ${inp.selectedNotes.join("\n\n") || "（无新增）"}
-
+${weekly ? `\n### 对外账（系统从追踪表实测，非估算）
+- 追踪表总数: ${inp.outwardAccount.total}
+- 对外类动作（分发/转化/产品/链路）: ${inp.outwardAccount.outwardTotal} 条，占 ${inp.outwardAccount.sharePct}%
+- 其中已完成: ${inp.outwardAccount.outwardDone}；未动/进行中: ${inp.outwardAccount.outwardStuck}
+- 最久未动的对外动作: ${inp.outwardAccount.oldestAge} 天 —— ${inp.outwardAccount.oldestText}
+- 学习类动作: ${inp.outwardAccount.learningTotal} 条，占 ${inp.outwardAccount.learningPct}%
+- 被拒绝/被批评次数: 无数据源（系统未记录，不得编造）
+` : ""}
 ### GitHub Trending（今日开发者工具榜；仅供判断工具生态，不是商业信号）
 ${inp.trendingLines || "（未取到）"}
 
@@ -229,6 +271,14 @@ ${inp.trendingLines || "（未取到）"}
     if (/## 工具风向[\s\S]*?(?=\n## |$)/.test(body)) {
       console.log("[dry-run] 工具风向段内容:\n" + body.match(/## 工具风向[\s\S]*?(?=\n## |$)/)[0]);
     }
+    if (/## 对外账[\s\S]*?(?=\n## |$)/.test(body)) {
+      console.log("[dry-run] 对外账段内容:\n" + body.match(/## 对外账[\s\S]*?(?=\n## |$)/)[0]);
+    } else if (weekly) {
+      console.log("[dry-run] ✗ 缺 ## 对外账 段");
+    }
+    console.log(`[dry-run] 实测对外数据: ${JSON.stringify(inp.outwardAccount)}`);
+    const alert = outwardAlertLine(inp.outwardAccount);
+    console.log(`[dry-run] 系统注记: ${alert || "（未触发：对外未动<5 或 最久<=14天）"}`);
     return;
   }
 
@@ -239,7 +289,8 @@ ${inp.trendingLines || "（未取到）"}
     const ww = String(Math.ceil((((monday - new Date(monday.getFullYear(), 0, 1)) / 86400e3) + 1) / 7)).padStart(2, "0");
     const outName = `weekly-W${ww}-${monday.toISOString().slice(0, 10)}.md`;
     const outPath = join(VAULT, "10_Daily", outName);
-    writeFileSync(outPath, `---\ntype: weekly-synthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${body}\n`);
+    const alert = outwardAlertLine(inp.outwardAccount);
+    writeFileSync(outPath, `---\ntype: weekly-synthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${alert ? alert + "\n\n" : ""}${body}\n`);
     commit(join(VAULT, "10_Daily", outName), `chore: weekly synthesis ${inp.dateStr}`);
     console.log(`weekly written: ${outName}`);
   } else {
