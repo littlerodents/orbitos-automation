@@ -28,10 +28,13 @@ timestamp() {
   # 2026-10-15 接线：内容生命周期“减少”——归档器随本轮自动跑（10 分钟节拍）
   /usr/local/bin/node "$SCRIPT_DIR/orbitos-archive-sweeper.mjs" sweep
   sweep_exit=$?
-  printf "[%s] launch: OrbitOS intake loop exit views=%s sync=%s promote=%s reconcile=%s sweep=%s\n" "$(timestamp)" "$views_exit" "$sync_exit" "$promote_exit" "$reconcile_exit" "$sweep_exit"
+  # 2026-10-25 接线：每天 1 条对外动作（幂等）；没做完次日日报会被扣留
+  /usr/local/bin/node "$SCRIPT_DIR/outward-actions.mjs"
+  outward_exit=$?
+  printf "[%s] launch: OrbitOS intake loop exit views=%s sync=%s promote=%s reconcile=%s sweep=%s outward=%s\n" "$(timestamp)" "$views_exit" "$sync_exit" "$promote_exit" "$reconcile_exit" "$sweep_exit" "$outward_exit"
 } >> "$LOG" 2>&1
 
-if (( views_exit != 0 || sync_exit != 0 || promote_exit != 0 || reconcile_exit != 0 || sweep_exit != 0 )); then
+if (( views_exit != 0 || sync_exit != 0 || promote_exit != 0 || reconcile_exit != 0 || sweep_exit != 0 || outward_exit != 0 )); then
   exit 1
 fi
 

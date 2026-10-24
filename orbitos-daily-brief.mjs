@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
 import { gatherTrendingForBrief } from "./github-trending.mjs";
+import { OUTWARD_PREFIX, decideGate, loadGateState } from "./outward-actions.mjs";
 
 const TRACKER_URL = "https://awvzqp87lyb.feishu.cn/base/LyUQbzSEPaGVmFs8ezScDyVhn1e";
 
@@ -127,7 +128,7 @@ async function gatherInputs() {
 
   // 3b. 对外账（反向指标，2026-10-24）：全部从追踪表实测，无数据源的一律标"未记录"
   const OUTWARD_PREFIXES = ["【主线·分发】", "【主线·转化】", "【主线·产品】", "【主线·链路】"];
-  const outward = allActions.filter(a => OUTWARD_PREFIXES.some(p => a.text.startsWith(p)));
+  const outward = allActions.filter(a => OUTWARD_PREFIXES.some(p => a.text.startsWith(p)) || a.text.startsWith(OUTWARD_PREFIX));
   const outwardStuck = outward.filter(a => a.status === "未动" || a.status === "进行中");
   const outwardDone = outward.filter(a => a.status === "已完成");
   const outwardOldest = outwardStuck.slice().sort((a, b) => b.age - a.age)[0] || null;
@@ -160,10 +161,34 @@ async function gatherInputs() {
     pendingBookmarks = readdirSync(matsDir).filter(f => f.endsWith(".md") && !readHead(join(matsDir, f), 400).includes("processed:")).length;
   }
 
-  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "", outwardAccount };
+  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "", outwardAccount, allActions };
 }
 
 // 6. GitHub Trending（开发者工具风向）——单独异步取，失败不拖垮日报
+// 2026-10-25：日报硬闸门。昨天的对外动作没完成 → 今天不发日报，只发一页教练反馈。
+// 无记录（系统刚上线/昨天没生成）不扣留——不因缺数据而惩罚。
+export function buildWithheldBrief(inp, gate) {
+  const a = inp.outwardAccount;
+  const streak = gate.streak > 1 ? `（连续 ${gate.streak} 天）` : "";
+  return `# Brief — ${inp.dateStr}（已扣留）
+
+> ⚠️ 今天没有日报。原因：昨天（${gate.yesterday}）的对外动作为 0${streak}。
+
+## 为什么扣留
+- 昨天：\`${OUTWARD_PREFIX}私聊]\` 未完成 → 已过期
+- 追踪表结构：对外 ${a.outwardTotal}/${a.total}（${a.sharePct}%）、学习 ${a.learningTotal}/${a.total}（${a.learningPct}%）
+- 最久未动的对外动作：${a.oldestAge} 天 —— ${a.oldestText}
+
+## 今天唯一的出口
+私聊 1 个目标用户（10 分钟）：发一句「我在做 safety-eval，想听你 10 分钟吐槽」→ 记下对方一句原话。
+做完在追踪表把「${OUTWARD_PREFIX}私聊]」改成「已完成」，明天的日报自动恢复。
+
+---
+*这一页是教练反馈，不是日报：没有 TL;DR、没有读书清单、没有工具风向。*
+*要豁免某天（出差/生病）：\`node outward-actions.mjs --excuse 原因\`*
+`;
+}
+
 // 对外账的机械注记：不依赖 LLM 是否听话，条件命中就由系统直接写进周报
 export function outwardAlertLine(a) {
   if (!a || !a.total) return "";
@@ -220,6 +245,25 @@ ${weekly ? `## 对外账
 async function main() {
   if (!DS_KEY) { console.error("no deepseek key"); process.exit(1); }
   const inp = await attachTrending(await gatherInputs());
+
+  // 硬闸门：只对日报生效；周报不受影响
+  if (!weekly) {
+    const gateState = loadGateState();
+    const gate = decideGate(inp.allActions, inp.dateStr, gateState.excused);
+    console.log(`outward gate: ${gate.gate} (${gate.reason}, streak=${gate.streak})`);
+    if (gate.gate === "withhold") {
+      const withheld = buildWithheldBrief(inp, gate);
+      if (dryRun) {
+        console.log("[dry-run] 日报会被扣留，将写入以下内容：\n" + withheld);
+        return;
+      }
+      const outPath = join(VAULT, "00_Inbox", `brief-${inp.dateStr}.md`);
+      writeFileSync(outPath, `---\ntype: daily-brief\ndate: ${inp.dateStr}\nstatus: withheld\nmodel: none\nsource: outward-gate\n---\n\n${withheld}`);
+      commit(join(VAULT, "00_Inbox", `brief-${inp.dateStr}.md`), `chore: daily brief ${inp.dateStr} (withheld)`);
+      console.log(`brief withheld: ${gate.reason}, streak=${gate.streak}`);
+      return;
+    }
+  }
   if (dryRun) console.log(`[dry-run] trending lines: ${inp.trendingLines ? inp.trendingLines.split("\n").length + " 行" : "（空）"}`);
 
   if (!inp.bookmarkNotes.length && !inp.selectedNotes.length && weekly === false) {
