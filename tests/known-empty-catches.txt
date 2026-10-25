@@ -1,0 +1,16 @@
+# 已知空 catch（技术债基线）— selfcheck A2 只检测「不得新增」
+# 生成: 2026-10-25，来源: node selfcheck.mjs --only A2
+# 说明: 这些是本次改造之前就存在的空 catch。修它们属于独立任务（会改变失败可见性），
+#       不在「反舒适区」这批改动范围内。若某天要清理，删一行即可，selfcheck 会守门。
+feishu-tracker.mjs@91
+learning-actions.mjs@66
+learning-actions.mjs@126
+learning-fetcher.mjs@44
+learning-fetcher.mjs@63
+monitor-agent-logic.mjs@170
+monitor-agent-logic.mjs@181
+monitor-agent-logic.mjs@198
+monitor-agent-logic.mjs@270
+monitor-timeline-fetcher.mjs@56
+monitor-timeline-fetcher.mjs@173
+monitor-timeline-fetcher.mjs@218
