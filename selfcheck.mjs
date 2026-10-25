@@ -173,6 +173,42 @@ check("A7-no-invented-metric", "产物里的比例必须等于实测值（不得
   return { pass: computed && noFakeField && noRejectedCount, detail: `比例实测=${computed} 无假字段=${noFakeField} 拒绝次数留空=${noRejectedCount}` };
 });
 
+// A8: 日报兜底的锁残留 → 兜底永久失效（2026-10-23 真实事故，10/23 日报缺失）
+check("A8-catchup-lock-clean", "日报兜底锁不得残留（stale 锁会让兜底永久失效）", () => {
+  const LOCK = "/tmp/orbitos-brief-catchup.lock";
+  if (!existsSync(LOCK)) return { pass: true, detail: "无锁残留" };
+  const mt = statSync(LOCK).mtimeMs;
+  const ageMin = Math.round((Date.now() - mt) / 60000);
+  // 30 分钟内的锁是正常持有中；超过即 stale（代码可自愈，但要让人知道发生过）
+  return {
+    pass: ageMin <= 30,
+    detail: `锁已存在 ${ageMin} 分钟（>30 视为异常；代码已能自愈，但这是信号）`,
+  };
+});
+
+// A9: 日报每天必有（缺失=静默失败）—— 覆盖 2026-10-23 那种"没人发现"的情况
+check("A9-brief-daily-present", "近 7 天日报不得缺失（缺失必须可见）", () => {
+  const dir = join(VAULT, "00_Inbox");
+  const missing = [];
+  for (let i = 1; i <= 7; i += 1) {
+    const d = new Date(Date.now() + 8 * 3600e3 - i * 86400e3).toISOString().slice(0, 10);
+    if (!existsSync(join(dir, `brief-${d}.md`))) missing.push(d);
+  }
+  const baselinePath = join(ROOT, "tests/known-brief-gaps.txt");
+  const known = existsSync(baselinePath)
+    ? new Set(readFileSync(baselinePath, "utf8").split("\n").map((x) => x.trim()).filter((x) => x && !x.startsWith("#")))
+    : new Set();
+  const novel = missing.filter((d) => !known.has(d));
+  return {
+    pass: novel.length === 0,
+    detail: novel.length
+      ? `新增缺失: ${novel.join(", ")}`
+      : missing.length
+        ? `近 7 天齐全（已知历史缺口 ${missing.join(", ")}，见 baseline）`
+        : "近 7 天齐全",
+  };
+});
+
 // =====================================================================
 // B. 生命周期（归档 + reconcile）
 // =====================================================================

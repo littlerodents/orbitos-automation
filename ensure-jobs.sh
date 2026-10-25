@@ -81,18 +81,21 @@ MIN_NOW=$(TZ=Asia/Shanghai date '+%M')
 LOCK_DIR="/tmp/orbitos-brief-catchup.lock"
 
 if [ "$HOUR_NOW" -gt 11 ] || { [ "$HOUR_NOW" -eq 11 ] && [ "$MIN_NOW" -ge 35 ]; }; then
-  if [ ! -f "$BRIEF_FILE" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
+  if [ ! -f "$BRIEF_FILE" ] && catchup_lock_acquire "$LOCK_DIR" 1800; then
     {
-      trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      # 无条件清理（不依赖 trap：后台子进程被 kill 时 trap 不一定执行 → 锁会永久残留）
+      trap 'catchup_lock_release "$LOCK_DIR"' EXIT INT TERM HUP
       echo "[$(date '+%F %T')] catchup: brief for $TODAY_STR missing, running" >> "$BRIEF_LOG"
       /Users/evander/Labs/codex/orbitos-automation/run-with-alert.sh \
         "daily-brief-catchup" "$BRIEF_LOG" \
         "$NODE_BIN" "$BRIEF_SCRIPT"
       if [ -f "$BRIEF_FILE" ]; then
         echo "[$(date '+%F %T')] catchup: brief for $TODAY_STR generated OK" >> "$BRIEF_LOG"
-        rmdir "$LOCK_DIR" 2>/dev/null
-        trap - EXIT
+      else
+        echo "[$(date '+%F %T')] catchup: brief for $TODAY_STR still missing, will retry next cycle" >> "$BRIEF_LOG"
       fi
+      catchup_lock_release "$LOCK_DIR"
+      trap - EXIT INT TERM HUP
     } &
   fi
 fi

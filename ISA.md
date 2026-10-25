@@ -2,7 +2,7 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 32/32
+progress: 36/36
 started: 2026-10-12T06:30:00Z
 updated: 2026-10-24T16:00:00Z
 iteration: 1
@@ -323,3 +323,35 @@ Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精�
 - G2 需 24h 后才有真实结论（观察期跳过）。
 - 扣留分支真实端到端（10-26 才可能触发）。
 - 历史 12 处空 catch 属技术债，已登记 baseline，未修。
+
+---
+
+# 附：F13 · 日报兜底锁残留（2026-10-25 事故修复）
+
+## Problem
+10/23 无日报。主任务 DeepSeek TLS 重置失败（有重试，属网络问题）；但 `ensure-jobs` 的兜底一次都没触发。
+根因：兜底用 `mkdir /tmp/orbitos-brief-catchup.lock` 互斥 + `trap EXIT` 释放。后台子进程被中断时 trap 未执行 →
+锁从 10/23 15:09 残留至今 → 此后 `mkdir` 永远失败 → 兜底永久失效（静默失败）。
+
+## Goal
+锁可自愈（stale 可抢占），且锁残留与日报缺失都能被一条命令检测出来。
+
+## Features
+- [x] ISC-33: `lib/catchup-lock.sh`：超过 30 分钟的锁视为 stale 可抢占；成功/失败都显式释放；不依赖 trap。
+- [x] ISC-34: `tests/catchup-lock.test.sh` 9 项（含"2 天残留锁可自愈"回放、非空目录 rmdir 陷阱）。
+- [x] ISC-35: selfcheck A8（锁残留）+ A9（近 7 天日报缺失，历史缺口用 baseline 登记）。
+- [x] ISC-36: 清理当前残留锁。
+
+## Decisions
+- D31 不写 started_at 到锁目录：会让 rmdir 失败（我在实施中犯过一次，已删）。用 mtime 判 age。
+- D32 A9 用 baseline 而非放宽容差：历史缺口（10-23）登记为已知，新增缺失立刻 FAIL，不制造永久噪音。
+
+## Verification
+- `zsh tests/catchup-lock.test.sh` → 9/9 PASS（含 age=203400s 的 2 天残留锁自愈）
+- 红队：造旧锁 → A8 FAIL，清理后 PASS
+- 红队：从 baseline 移除 10-23 → A9 FAIL，恢复后 PASS
+- 当前 selfcheck：25 项，24 PASS / 0 FAIL / 1 SKIP（G2 观察期）
+
+## Remaining Work
+- 10/23 的日报不可重建（那天已过），登记为已知缺口。
+- 若某天再次缺失，A9 会 FAIL —— 届时先看 A8 与 ensure-jobs 日志。

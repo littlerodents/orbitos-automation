@@ -30,6 +30,8 @@ tail -20 ~/.config/orbitos-automation/selfcheck.jsonl
 | **A5** gate-exit-not-piped | 闸门调用不得被 `\|` 截断 | 扫 mjs/sh/md 是否出现 `closeloop-verify ... \| head/tail/grep` | 0 处 | 退出码被管道吃掉，把失败读成成功。我犯过一次 |
 | **A6** isa-has-evidence | 根因结论必须带取证 | 检查 `ISA.md` 有 `## Problem` 且含 git/实测/取证类证据 | 两者都有 | 我把假设当结论（说过"阈值太严"，实际是时间错位） |
 | **A7** no-invented-metric | 不得让 LLM 编指标 | 检查 brief 里比例是算出来的、无"本周完成数"、拒绝次数明确留空 | 3/3 | 报告里出现无法追溯的数字 |
+| **A8** catchup-lock-clean | 日报兜底锁不得残留 | 检查 `/tmp/orbitos-brief-catchup.lock` 是否存在且 >30 分钟 | 无锁或锁新鲜 | **兜底永久失效**。2026-10-23 就因此整天没日报，没人发现 |
+| **A9** brief-daily-present | 近 7 天日报不得缺失 | 逐日检查 `00_Inbox/brief-YYYY-MM-DD.md`，与 `tests/known-brief-gaps.txt` 比对 | 无**新增**缺失 | 某天静默漏发。历史缺口 10-23 已登记 baseline |
 
 ## B. 生命周期（归档 + 记录层归档）
 
@@ -79,6 +81,16 @@ tail -20 ~/.config/orbitos-automation/selfcheck.jsonl
 | **G2** alert-volume | 上线后每天 alert ≤ 2 | 数 vault 里 `alert:` commit（按天） | 每天 ≤2 | 节流没生效。**上线 24h 内显示 SKIP** |
 
 ---
+
+## 2026-10-25 新增的事故：兜底机制自己坏了
+
+**现象**：10/23 没有日报。主任务因 DeepSeek TLS 重置失败（合理，有重试）；但 `ensure-jobs` 的兜底**一次都没跑**。
+
+**根因**：兜底用 `mkdir /tmp/orbitos-brief-catchup.lock` 做互斥，`trap EXIT` 清理。那次后台子进程被中断，trap 没执行 → 锁从 10/23 15:09 残留至今 → 之后所有 `mkdir` 都失败 → 永久不再补跑。
+
+**修复**：`lib/catchup-lock.sh` —— 锁超过 30 分钟视为 stale 可抢占；无论成败都显式释放；不依赖 trap。
+
+**检测**：A8（锁残留）、A9（日报每天必有）。红队已验证：造一个 10/23 的旧锁 → A8 FAIL；把 10-23 从 baseline 移除 → A9 FAIL。
 
 ## 已知不检测的（诚实边界）
 
