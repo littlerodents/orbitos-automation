@@ -6,6 +6,8 @@
 set -u
 
 JOB="$1"; LOG_FILE="$2"; shift 2
+SCRIPT_DIR="${0:A:h}"
+source "$SCRIPT_DIR/lib/alert-policy.sh"
 STATE_DIR="$HOME/.config/orbitos-automation/alerts"
 COUNT_FILE="$STATE_DIR/$JOB.count"
 CONFIG="$HOME/.config/orbitos-automation/config.json"
@@ -26,10 +28,20 @@ echo "[$(date '+%F %T')] $JOB failed (exit $CODE), consecutive=$COUNT" >> "$LOG_
 
 [ "$COUNT" -lt "$THRESHOLD" ] && exit "$CODE"
 
-# ---- 达到阈值：写 ALERT 到 vault（同一天同名覆盖，不刷屏） ----
+# ---- 达到阈值：节流后写 ALERT（2026-10-25） ----
+# 每天首次失败必通知；此后只在 2/5/20/50 次里程碑再通知，避免网络抖动刷几十条 commit。
+TODAY_NOW=$(date '+%F')
+LAST_DM_FILE="$STATE_DIR/$JOB.last-dm"
+DAILY_FIRST=0
+[ "$(cat "$LAST_DM_FILE" 2>/dev/null)" != "$TODAY_NOW" ] && DAILY_FIRST=1
+if ! alert_should_notify "$COUNT" "$DAILY_FIRST"; then
+  echo "[$(date '+%F %T')] alert write skipped (consecutive=$COUNT; 当天已通知且非里程碑)" >> "$LOG_FILE"
+  exit "$CODE"
+fi
+
 DATE=$(date '+%F')
 ALERT_PATH="00_Inbox/ALERT-$JOB-$DATE.md"
-BODY=$(printf '# ALERT: %s 连续失败\n\n- 时间: %s\n- 连续失败次数: %s\n- 最近退出码: %s\n\n## 日志尾部\n\n```\n%s\n```\n' \
+BODY=$(printf '# ALERT: %s 连续失败\n\n- 时间: %s\n- 连续失败次数: %s\n- 最近退出码: %s\n- 通知规则: 每天首次失败 + 2/5/20/50 次里程碑（其余次数只记日志，不再提交）\n\n## 日志尾部\n\n```\n%s\n```\n' \
   "$JOB" "$(date '+%F %T %Z')" "$COUNT" "$CODE" "$(tail -20 "$LOG_FILE" 2>/dev/null)")
 B64=$(printf '%s' "$BODY" | base64)
 

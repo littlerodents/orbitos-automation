@@ -2,7 +2,7 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 25/25
+progress: 32/32
 started: 2026-10-12T06:30:00Z
 updated: 2026-10-24T16:00:00Z
 iteration: 1
@@ -279,3 +279,47 @@ Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精�
 ## Remaining Work
 - **未验证**：扣留分支的真实端到端（需要今天 10-25 的对外动作未完成，明天 10-26 才会自然触发）。今天是 `no-record → allow`。
 - 若连续扣留超过 3 天仍不想做，应视为"这个主线不该用这个约束"——需主人重新决定，而不是系统加码。
+
+---
+
+# 附：F11 · 告警节流（④）+ F12 · 自检体系（2026-10-25）
+
+## F11 Problem
+近 7 天 53 条 `alert: orbitos-git-sync` commit，全部是网络抖动。ALERT 文件每次内容变化（时间戳+计数）→ 每次 commit，真故障信号被淹没。
+
+## F11 Features
+- [x] ISC-26: 节流策略抽为 `lib/alert-policy.sh`（可测）：每天首次失败必通知 + 2/5/20/50 里程碑。
+- [x] ISC-27: 7 天回放证明：56 次失败只通知 11 次（改造前 56 次 commit）。
+
+## F11 Decisions
+- D26 保留"每天首次必通知"：跨天持续失败时主人仍能收到，不会因为计数不是里程碑而完全静默。
+- D27 不在本次加"恢复通知"（会占用每天一条 DM 的配额），记入 Remaining。
+
+## F12 Problem
+主人无法分辨"哪个改动做得好、哪个做坏了"；我也犯过 7 类错（import 副作用、静默 catch、假承诺、私有证据进公开库、管道吞退出码、假设当结论、编指标）。
+
+## F12 Goal
+一条命令 `node selfcheck.mjs`，24 项检测给出 PASS/FAIL/SKIP；每项在 `CHECKS.md` 有 id、检测方法、失败含义、对应事故。
+
+## F12 Features
+- [x] ISC-28: 24 项检测（A 事故回归 7 / B 生命周期 4 / C trending 3 / D 反向指标 2 / E 断点 2 / F 教练 4 / G 节流 2）。
+- [x] ISC-29: 只读设计——默认不改 vault、不调飞书写操作、不发消息。
+- [x] ISC-30: 结果追加 `~/.config/orbitos-automation/selfcheck.jsonl`，可看哪项在反复失败。
+- [x] ISC-31: 观察期机制：G2 在上线 24h 内显示 SKIP 而不是伪 PASS。
+- [x] ISC-32: 空 catch 用 baseline（`tests/known-empty-catches.txt`）——只拦新增，不假装历史债已清。
+
+## F12 Decisions
+- D28 检测器自身要从扫描中排除：它的源码含检测用的正则字面量，否则自己判自己 FAIL。
+- D29 F3 必须同时看脚本与日志：只看日志会在删掉调用后仍 PASS（红队 R2 实际抓到过这个缺陷并修正）。
+- D30 不做"AI 判断我的判断对不对"：A6 只检查"有没有取证"，结论对错仍需主人反驳。
+
+## F12 Verification
+- 全量：23 PASS / 0 FAIL / 1 SKIP（G2 观察期）
+- 红队 R1（关掉 import 守卫）→ A1 FAIL，恢复后 PASS
+- 红队 R2（删 outward 调用，保留旧日志）→ F3 FAIL，恢复后 PASS；此实验发现并修正了 F3 只读日志的缺陷
+- 二次运行结果一致（passed=23, failed=0, skipped=1）
+
+## Remaining Work
+- G2 需 24h 后才有真实结论（观察期跳过）。
+- 扣留分支真实端到端（10-26 才可能触发）。
+- 历史 12 处空 catch 属技术债，已登记 baseline，未修。
