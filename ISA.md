@@ -2,7 +2,7 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 36/36
+progress: 40/41
 started: 2026-10-12T06:30:00Z
 updated: 2026-10-24T16:00:00Z
 iteration: 1
@@ -355,3 +355,33 @@ Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精�
 ## Remaining Work
 - 10/23 的日报不可重建（那天已过），登记为已知缺口。
 - 若某天再次缺失，A9 会 FAIL —— 届时先看 A8 与 ensure-jobs 日志。
+
+---
+
+# 附：F14 · 日报冒烟 + 11:00 定时（2026-10-26）
+
+## Problem
+兜底锁修好后，需要验证「launchd → 生成 → 落盘」整条链路在**干净环境**里能不能跑通
+（launchd 的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，无代理变量）。跑通后把日报从 11:30 挪到 11:00。
+
+## Features
+- [x] ISC-37: `--out-dir` 冒烟模式：写临时目录、不 commit、不调 tracker/learning、不推飞书。
+- [x] ISC-38: `brief-smoketest.sh` 记录 launchd 环境 + 产物 + 段落齐备性。
+- [x] ISC-39: launchd 定时任务触发实测（00:56:02 自动跑，exit 0，70 秒，六段齐备）。
+- [x] ISC-40: 日报 plist 改为 11:00（文件 + 仓库快照）。
+- [ ] ISC-41: **重载使 11:00 真正生效** —— 被安全闸门拦下（bootout 判为停服务），需主人执行。
+
+## Decisions
+- D33 冒烟写临时目录而非覆盖正式 brief：避免每天重复推送，也避免污染 Today.md。
+- D34 冒烟用真实 LLM + 真实网络，不 mock：要验的正是"launchd 环境下网络与密钥是否可用"。
+- D35 新增 A10/A11 检测：A10 抓「改了 plist 却忘了重载」，A11 抓「临时任务忘清理每天白跑」。
+
+## Verification
+- 冒烟：`/tmp/orbitos-smoketest/20261026-005602/`，exit 0，70s，TL;DR/行动/学习/连接/工具风向/PATTERN 六段齐备
+- 环境证据：PATH 干净、无 proxy 变量，DeepSeek 与 GitHub 均可达
+- A10 当前 FAIL（文件 11:00 vs 已加载 11:30）—— 设计如此，等待主人重载
+- A11 当前 FAIL（冒烟任务仍加载）—— 等待主人清理
+
+## Remaining Work
+- 主人执行两条命令后，A10/A11 应变 PASS，11:00 生效。
+- 已知隐患：`dateStr` 用 UTC 日期（`toISOString`），若将来把任务排在 08:00 前会算成前一天。11:00 无影响。
