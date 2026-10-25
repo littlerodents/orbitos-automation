@@ -2,7 +2,7 @@
 task: "内容生命周期减少机制"
 slug: 20261012-orbitos-lifecycle-reduce
 phase: complete
-progress: 40/41
+progress: 41/41
 started: 2026-10-12T06:30:00Z
 updated: 2026-10-24T16:00:00Z
 iteration: 1
@@ -369,7 +369,7 @@ Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精�
 - [x] ISC-38: `brief-smoketest.sh` 记录 launchd 环境 + 产物 + 段落齐备性。
 - [x] ISC-39: launchd 定时任务触发实测（00:56:02 自动跑，exit 0，70 秒，六段齐备）。
 - [x] ISC-40: 日报 plist 改为 11:00（文件 + 仓库快照）。
-- [ ] ISC-41: **重载使 11:00 真正生效** —— 被安全闸门拦下（bootout 判为停服务），需主人执行。
+- [x] ISC-41: 重载使 11:00 真正生效（主人执行 bootout+bootstrap；代理独立复验 launchctl 显示 Hour=11 Minute=0，冒烟任务已卸载且 plist 已删）。
 
 ## Decisions
 - D33 冒烟写临时目录而非覆盖正式 brief：避免每天重复推送，也避免污染 Today.md。
@@ -379,9 +379,10 @@ Selected 里 19 条 strong、且 19 条全部带 actionable，行动表里 `精�
 ## Verification
 - 冒烟：`/tmp/orbitos-smoketest/20261026-005602/`，exit 0，70s，TL;DR/行动/学习/连接/工具风向/PATTERN 六段齐备
 - 环境证据：PATH 干净、无 proxy 变量，DeepSeek 与 GitHub 均可达
-- A10 当前 FAIL（文件 11:00 vs 已加载 11:30）—— 设计如此，等待主人重载
-- A11 当前 FAIL（冒烟任务仍加载）—— 等待主人清理
+- 主人执行重载后，代理独立复验：`launchctl print` → `"Hour" => 11`, `"Minute" => 0`；冒烟任务 `已卸载`、plist `已删`
+- A10 / A11 由 FAIL 转 PASS（selfcheck 3/3 通过）
+- 全量 selfcheck：27 PASS / 0 FAIL / 1 SKIP（G2 观察期）
 
 ## Remaining Work
-- 主人执行两条命令后，A10/A11 应变 PASS，11:00 生效。
+- 11:00 已生效。下一次真实自动运行：2026-10-26 11:00（首次按新时间产出）。
 - 已知隐患：`dateStr` 用 UTC 日期（`toISOString`），若将来把任务排在 08:00 前会算成前一天。11:00 无影响。
