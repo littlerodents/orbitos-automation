@@ -209,6 +209,39 @@ check("A9-brief-daily-present", "近 7 天日报不得缺失（缺失必须可�
   };
 });
 
+// A10: 定时配置必须与文件一致（改了 plist 但忘了重载 → 你以为生效了，其实没有）
+check("A10-daily-brief-schedule", "日报定时必须是 11:00，且已加载配置与文件一致", () => {
+  const plistPath = join(homedir(), "Library/LaunchAgents/com.evander.orbitos-daily-brief.plist");
+  if (!existsSync(plistPath)) return { pass: false, detail: "plist 不存在" };
+  const text = readFileSync(plistPath, "utf8");
+  const hour = text.match(/<key>Hour<\/key>\s*<integer>(\d+)<\/integer>/)?.[1];
+  const minute = text.match(/<key>Minute<\/key>\s*<integer>(\d+)<\/integer>/)?.[1];
+  const wantFile = hour === "11" && minute === "0";
+  // 已加载的配置（launchctl print）—— 改文件但未重载时这里仍是旧值
+  const r = sh("launchctl", ["print", `gui/${process.getuid()}/com.evander.orbitos-daily-brief`]);
+  const loadedMatch = (r.stdout || "").match(/"Minute" => (\d+)/);
+  const loadedMinute = loadedMatch ? loadedMatch[1] : null;
+  const loadedOk = loadedMinute === "0";
+  return {
+    pass: wantFile && loadedOk,
+    detail: `文件 ${hour}:${String(minute).padStart(2, "0")}（要 11:00）｜已加载 minute=${loadedMinute ?? "?"}`
+      + (wantFile && !loadedOk ? "  ← 文件已改但未重载，需 bootout+bootstrap" : ""),
+  };
+});
+
+// A11: 临时冒烟任务不得长期留在 launchd（会每天白跑一次 LLM）
+check("A11-no-stale-smoketest", "临时冒烟任务必须已清理", () => {
+  const plistPath = join(homedir(), "Library/LaunchAgents/com.evander.orbitos-brief-smoketest.plist");
+  const exists = existsSync(plistPath);
+  const r = sh("launchctl", ["print", `gui/${process.getuid()}/com.evander.orbitos-brief-smoketest`]);
+  const loaded = r.status === 0;
+  return {
+    pass: !exists && !loaded,
+    detail: `plist=${exists ? "存在" : "已删"} 已加载=${loaded ? "是" : "否"}`
+      + (loaded ? "  ← 每天 00:56 会白跑一次" : ""),
+  };
+});
+
 // =====================================================================
 // B. 生命周期（归档 + reconcile）
 // =====================================================================

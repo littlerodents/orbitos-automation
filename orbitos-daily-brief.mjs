@@ -61,6 +61,12 @@ const VAULT = cfg.vault_path;
 const weekly = process.argv.includes("--weekly");
 // 2026-10-24 加：无副作用验证（不写 vault、不 commit、不调 tracker/飞书）
 const dryRun = process.argv.includes("--dry-run");
+// 冒烟模式（2026-10-25）：写到指定目录验证整条链路，不覆盖正式日报、不 commit、不调 tracker
+const outDirArg = (() => {
+  const i = process.argv.indexOf("--out-dir");
+  return i >= 0 ? process.argv[i + 1] : null;
+})();
+const smoke = Boolean(outDirArg);
 
 async function withRetry(fn, attempts = 3, baseMs = 1000) {
   let lastErr;
@@ -257,9 +263,9 @@ async function main() {
         console.log("[dry-run] 日报会被扣留，将写入以下内容：\n" + withheld);
         return;
       }
-      const outPath = join(VAULT, "00_Inbox", `brief-${inp.dateStr}.md`);
+      const outPath = join(smoke ? outDirArg : join(VAULT, "00_Inbox"), `brief-${inp.dateStr}.md`);
       writeFileSync(outPath, `---\ntype: daily-brief\ndate: ${inp.dateStr}\nstatus: withheld\nmodel: none\nsource: outward-gate\n---\n\n${withheld}`);
-      commit(join(VAULT, "00_Inbox", `brief-${inp.dateStr}.md`), `chore: daily brief ${inp.dateStr} (withheld)`);
+      if (!smoke) commit(join(VAULT, "00_Inbox", `brief-${inp.dateStr}.md`), `chore: daily brief ${inp.dateStr} (withheld)`);
       console.log(`brief withheld: ${gate.reason}, streak=${gate.streak}`);
       return;
     }
@@ -339,10 +345,17 @@ ${inp.trendingLines || "（未取到）"}
     console.log(`weekly written: ${outName}`);
   } else {
     const outName = `brief-${inp.dateStr}.md`;
-    const outPath = join(VAULT, "00_Inbox", outName);
+    const outPath = join(smoke ? outDirArg : join(VAULT, "00_Inbox"), outName);
     writeFileSync(outPath, `---\ntype: daily-brief\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Brief — ${inp.dateStr}\n\n${body}\n\n---\n📊 [每日追踪表（打卡/勾行动）](${TRACKER_URL})\n`);
-    commit(join(VAULT, "00_Inbox", outName), `chore: daily brief ${inp.dateStr}`);
-    console.log(`brief written: ${outName}`);
+    if (!smoke) commit(join(VAULT, "00_Inbox", outName), `chore: daily brief ${inp.dateStr}`);
+    console.log(`brief written: ${outPath}`);
+
+    if (smoke) {
+      console.log("[smoke] 跳过 Today.md / learning-actions / feishu-tracker / 飞书推送");
+      if (!inp.trendingLines) console.log("[smoke] 注意：trending 数据为空");
+      console.log(`[smoke] outward gate: ${inp.outwardAccount ? "ok" : "missing"}; pendingBookmarks=${inp.pendingBookmarks}`);
+      return;
+    }
 
     // Today.md 重写（无 LLM，模板化）
     const todayMd = `---\ntype: daily-hub\ndate: ${inp.dateStr}\nstatus: auto-generated\n---\n# Today\n\n**TL;DR**: ${tldr}\n\n## 快速入口\n- 📊 [每日追踪表（打卡/勾行动）](${TRACKER_URL})\n- 今日书签整理: [[bookmarks-${inp.dateStr}]]\n- 最近日报: [[brief-${inp.dateStr}]]\n\n## 数据\n- 未处理书签: ${inp.pendingBookmarks} 条\n- 活跃项目: ${inp.projects.length} 个\n`;
