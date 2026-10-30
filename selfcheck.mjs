@@ -393,7 +393,7 @@ check("G1-alert-throttle", "告警节流策略（每天首次 + 里程碑）必�
 });
 
 check("G2-alert-volume", "节流上线后，每天 alert 提交数必须 ≤ 2", () => {
-  const SINCE = "2026-10-25T11:00:00+08:00"; // 节流改造生效时间（实测 commit f44f0b4 之后）
+  const SINCE = "2026-10-30T12:00:00+08:00"; // 新架构（6 任务 + 网络感知）上线时间
   const sinceMs = Date.parse(SINCE);
   const hours = (Date.now() - sinceMs) / 3600e3;
   if (hours < 24) return skip(`观察期：距上线 ${hours.toFixed(1)}h（需满 24h 才有意义）`);
