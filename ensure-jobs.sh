@@ -4,6 +4,11 @@
 # 才被发现。本脚本由 git-sync（5 分钟一轮）尾部调用，让这类破坏在 5 分钟内自愈。
 set -u
 
+SCRIPT_DIR="${0:A:h}"
+source "$SCRIPT_DIR/lib/alert-policy.sh"
+source "$SCRIPT_DIR/lib/catchup-lock.sh"
+source "$SCRIPT_DIR/lib/net-check.sh"
+
 LOG="/Users/evander/Labs/codex/orbitos-automation/ensure-jobs.log"
 REPO_LAUNCHD="/Users/evander/Labs/codex/orbitos-automation/launchd"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -12,17 +17,12 @@ CONFIG="$HOME/.config/orbitos-automation/config.json"
 UID_=$(id -u)
 
 JOBS=(
+  com.evander.orbitos-core
   com.evander.orbitos-daily-brief
-  com.evander.orbitos-weekly-synthesis
-  com.evander.orbitos-brief-push-v2
-  com.evander.orbitos-bookmark-organizer
-  com.evander.orbitos-git-sync
-  com.evander.monitor-timeline-fetcher
-  com.evander.orbitos-learning-fetcher
+  com.evander.orbitos-weekly-company
+  com.evander.orbitos-weekly-personal
   com.evander.orbitos-evening-reminder
-  com.evander.orbitos-archive-sweeper
-  com.evander.cdp-proxy
-  com.evander.chrome-x-automation
+  com.evander.disk-hygiene
 )
 
 mkdir -p "$GUARD_STATE"
@@ -81,7 +81,11 @@ MIN_NOW=$(TZ=Asia/Shanghai date '+%M')
 LOCK_DIR="/tmp/orbitos-brief-catchup.lock"
 
 if [ "$HOUR_NOW" -gt 11 ] || { [ "$HOUR_NOW" -eq 11 ] && [ "$MIN_NOW" -ge 35 ]; }; then
-  if [ ! -f "$BRIEF_FILE" ] && catchup_lock_acquire "$LOCK_DIR" 1800; then
+  # 断网时不要空跑生成（会失败并刷日志）；标记 pending，网络恢复后由 net_ok 放行
+  if [ ! -f "$BRIEF_FILE" ] && ! net_ok 6; then
+    echo "[$(date '+%F %T')] catchup: skipped (no network); will retry when network returns" >> "$BRIEF_LOG"
+    net_mark_pending "daily-brief"
+  elif [ ! -f "$BRIEF_FILE" ] && catchup_lock_acquire "$LOCK_DIR" 1800; then
     {
       # 无条件清理（不依赖 trap：后台子进程被 kill 时 trap 不一定执行 → 锁会永久残留）
       trap 'catchup_lock_release "$LOCK_DIR"' EXIT INT TERM HUP

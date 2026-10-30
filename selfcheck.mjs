@@ -406,6 +406,63 @@ check("G2-alert-volume", "节流上线后，每天 alert 提交数必须 ≤ 2",
 });
 
 // =====================================================================
+// H. 本机环境（2026-10-30）
+// =====================================================================
+check("H1-conda-clean", "conda 启动不得报 entry point 错误", () => {
+  const r = sh("/opt/anaconda3/bin/conda", ["--version"]);
+  const err = (r.stderr || "").trim();
+  const ok = r.status === 0 && !/Error while loading conda entry point/i.test(err);
+  return { pass: ok, detail: ok ? `conda ${(r.stdout || "").trim()}` : `仍有报错: ${err.split("\n")[0].slice(0, 110)}` };
+});
+
+check("H2-libarchive20-present", "libmamba 依赖的 libarchive.20.dylib 必须存在", () => {
+  const ok = existsSync("/opt/anaconda3/lib/libarchive.20.dylib");
+  return { pass: ok, detail: ok ? "存在" : "缺失 → libmamba 加载失败" };
+});
+
+check("H3-shadowrocket-direct-rules", "Shadowrocket 里 typeless/合思 的直连规则必须还在", () => {
+  const db = join(homedir(), "Library/Containers/com.liguangming.Shadowrocket/Data/Documents/Databases/Shadowrocket.db");
+  if (!existsSync(db)) return skip("未找到 Shadowrocket 配置");
+  let out = "";
+  try {
+    out = execFileSync("sqlite3", [db, "select value from config where section='rule' and name='DOMAIN-SUFFIX';"], { encoding: "utf8", timeout: 15000 });
+  } catch { return skip("sqlite3 读取失败"); }
+  const vals = out.split("\n").map((x) => x.trim()).filter(Boolean);
+  const need = ["typeless.com", "ekuaibao.com", "hesi.com", "hosecloud.com"];
+  const missing = need.filter((d) => !vals.includes(d));
+  return { pass: missing.length === 0, detail: missing.length ? `缺失: ${missing.join(", ")}（订阅更新可能覆盖）` : `${need.length} 条都在` };
+});
+
+// =====================================================================
+// I. 自动化架构（2026-10-30 重构：14 → 6 个任务）
+// =====================================================================
+check("I1-task-count", "自动化任务必须是 6 个（不是 14 个）", () => {
+  const dir = join(homedir(), "Library/LaunchAgents");
+  const j = readdirSync(dir).filter((f) => /^com\.evander\.(orbitos-(core|daily-brief|weekly-company|weekly-personal|evening-reminder)|disk-hygiene)\.plist$/.test(f));
+  return { pass: j.length === 6, detail: `匹配 ${j.length} 个: ${j.map((x) => x.replace("com.evander.", "").replace(".plist", "")).join(", ")}` };
+});
+
+check("I2-network-aware", "core/ensure-jobs 必须在无网时静默跳过", () => {
+  const core = readFileSync(join(ROOT, "orbitos-core.sh"), "utf8");
+  const ej = readFileSync(join(ROOT, "ensure-jobs.sh"), "utf8");
+  const okCore = /net_ok/.test(core) && /mark_pending/.test(core);
+  const okEj = /net_ok/.test(ej);
+  return { pass: okCore && okEj, detail: `core=${okCore} ensure-jobs=${okEj}` };
+});
+
+check("I3-fallback-trap", "git-sync 任何退出路径都必须执行兜底（trap EXIT）", () => {
+  const s = readFileSync(join(ROOT, "orbitos-git-sync.sh"), "utf8");
+  const ok = /trap run_fallback EXIT/.test(s);
+  return { pass: ok, detail: ok ? "trap 已就位" : "缺 trap → exit 1 会跳过兜底（2026-10-27 日报断 3 天的根因）" };
+});
+
+check("I4-weekly-split", "周报必须拆成 company/personal 两套参数", () => {
+  const s = readFileSync(join(ROOT, "orbitos-daily-brief.mjs"), "utf8");
+  const ok = /weekly-company/.test(s) && /weekly-personal/.test(s);
+  return { pass: ok, detail: ok ? "--weekly-company / --weekly-personal 都存在" : "缺参数" };
+});
+
+// =====================================================================
 // 汇总
 // =====================================================================
 const passed = results.filter((r) => r.status === "PASS").length;

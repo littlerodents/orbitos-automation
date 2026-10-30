@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
 	<key>Label</key>
 	<string>com.evander.orbitos-daily-brief</string>
 	<key>ProgramArguments</key>
@@ -12,9 +17,9 @@
 	<key>RunAtLoad</key>
 	<false/>
 	<key>StandardErrorPath</key>
-	<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.err.log</string>
+	<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.launchd.err.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.log</string>
+	<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.launchd.out.log</string>
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>

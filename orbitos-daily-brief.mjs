@@ -58,7 +58,10 @@ function actionsFromTracker() {
 const cfg = loadConfig();
 const DS_KEY = process.env.DEEPSEEK_API_KEY || cfg.deepseek_api_key || "";
 const VAULT = cfg.vault_path;
-const weekly = process.argv.includes("--weekly");
+const weeklyCompany = process.argv.includes("--weekly-company");
+const weeklyPersonal = process.argv.includes("--weekly-personal");
+const weekly = weeklyCompany || weeklyPersonal;
+const weeklyKind = weeklyCompany ? "company" : weeklyPersonal ? "personal" : null;
 // 2026-10-24 加：无副作用验证（不写 vault、不 commit、不调 tracker/飞书）
 const dryRun = process.argv.includes("--dry-run");
 // 冒烟模式（2026-10-25）：写到指定目录验证整条链路，不覆盖正式日报、不 commit、不调 tracker
@@ -213,7 +216,37 @@ async function attachTrending(inp) {
   return inp;
 }
 
-const SYSTEM = `你是 Evander 的 vault 思考伙伴。为 OrbitOS 写${weekly ? "周报" : "日报"}。不要拒绝，不要解释你是谁，直接写正文。
+const SYSTEM = weeklyCompany
+  ? `你是 Evander 的工作复盘伙伴。写「公司周报」——只关心一件事：本周对外推进了什么、卡在哪、下周必须动哪一步。不要拒绝，不要解释你是谁，直接写正文。
+格式（严格遵守）：
+## 本周结论
+一句话，≤30 汉字：本周对外进展的真实状态（有推进 / 原地 / 退步），不美化。
+## 对外账单
+从「对外账」区引用实测数字：对外动作占比、未动条数、最久卡龄。禁止编造。
+## 本周对外动作
+做过什么（有就列，没有就写「本周对外动作为 0」）。每条：动作 + 结果（对方回了什么/发出去了）。
+## 最大的卡点
+只挑 1 个，说清是「没时间 / 不知道怎么开口 / 怕被拒绝 / 其他」。
+## 下周必做第一步
+一个 5 分钟能启动的具体动作（发给谁、说什么话）。
+## 风险
+如果下周延续本周节奏，30 天后会怎样。直说。
+`
+  : weeklyPersonal
+  ? `你是 Evander 的思考伙伴。写「个人周报」——只关心：这周学了什么、想了什么、有没有变化。不要拒绝，不要解释你是谁，直接写正文。
+格式（严格遵守）：
+## 一句话
+≤30 汉字，这周最真实的一个变化或发现。
+## 学到的东西
+≤3 条，每条：标题 + 一句 why + wikilink。没有就写「本周无值得记录的输入」。
+## 想清楚的一件事
+2-4 句。允许没有结论。
+## 下周想试什么
+一个具体的小实验（做什么、多久、怎么判断有用）。
+## PATTERN
+一个正在变得清晰的偏好/模式，2-4 句。
+`
+  : `你是 Evander 的 vault 思考伙伴。为 OrbitOS 写日报。不要拒绝，不要解释你是谁，直接写正文。
 OrbitOS 是极简系统：飞书是提醒面，Obsidian 存精选。他在意的主线：一人公司(OPC)落地、程序化SEO、个人AI基础设施、AI agent 工程。
 格式（严格遵守）：
 ## TL;DR
@@ -229,7 +262,7 @@ ${weekly ? "本周" : "今日"}三线学习清单（直接照着读，每条带�
 另外可补充书签整理/研究笔记里最值得精读的 ≤2 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
 ## CONNECTIONS
 书签/研究/项目之间 ≤3 个真实连接，用 [[wikilink]]。不足 3 个就诚实说。
-${weekly ? `## 对外账
+${weeklyCompany ? `## 对外账
 用「对外账」区的实测数字回答一个问题：**这周我让谁看见了我？**
 必须包含：
 1. 对外动作在追踪表里的占比（用原数字，如 7/76=9%），对比学习类占比。
@@ -303,16 +336,22 @@ ${weekly ? `\n### 对外账（系统从追踪表实测，非估算）
 ### GitHub Trending（今日开发者工具榜；仅供判断工具生态，不是商业信号）
 ${inp.trendingLines || "（未取到）"}
 
-写出${weekly ? "周报" : "日报"}正文（从 ## TL;DR 开始，不要自己加一级标题）。`;
+写出${weeklyCompany ? "公司周报" : weeklyPersonal ? "个人周报" : "日报"}正文（从 ${weeklyCompany ? "## 本周结论" : weeklyPersonal ? "## 一句话" : "## TL;DR"} 开始，不要自己加一级标题）。`;
 
   const resp = await callDeepSeek([
     { role: "system", content: SYSTEM },
     { role: "user", content: user },
   ]);
   const body = (resp.choices?.[0]?.message?.content || "").trim();
-  if (!body.startsWith("## TL;DR")) { console.error("LLM 输出格式异常，放弃:\n", body.slice(0, 300)); process.exit(1); }
+  // 三种产物首段不同：日报=TL;DR，公司周报=本周结论，个人周报=一句话
+  const expectedStart = weeklyCompany ? "## 本周结论" : weeklyPersonal ? "## 一句话" : "## TL;DR";
+  if (!body.startsWith(expectedStart)) { console.error(`LLM 输出格式异常（期望 ${expectedStart}），放弃:\n`, body.slice(0, 300)); process.exit(1); }
 
-  const tldr = body.match(/## TL;DR\n(.+)/)?.[1]?.trim() || "";
+  const tldr = weeklyCompany
+    ? (body.match(/## 本周结论\n(.+)/)?.[1]?.trim() || "")
+    : weeklyPersonal
+      ? (body.match(/## 一句话\n(.+)/)?.[1]?.trim() || "")
+      : (body.match(/## TL;DR\n(.+)/)?.[1]?.trim() || "");
 
   if (dryRun) {
     console.log(`[dry-run] 将写入 ${weekly ? "10_Daily" : "00_Inbox"}；不落盘、不 commit、不调 tracker`);
@@ -323,8 +362,8 @@ ${inp.trendingLines || "（未取到）"}
     }
     if (/## 对外账[\s\S]*?(?=\n## |$)/.test(body)) {
       console.log("[dry-run] 对外账段内容:\n" + body.match(/## 对外账[\s\S]*?(?=\n## |$)/)[0]);
-    } else if (weekly) {
-      console.log("[dry-run] ✗ 缺 ## 对外账 段");
+    } else if (weeklyCompany) {
+      console.log("[dry-run] ✗ 公司周报缺 ## 对外账 段");
     }
     console.log(`[dry-run] 实测对外数据: ${JSON.stringify(inp.outwardAccount)}`);
     const alert = outwardAlertLine(inp.outwardAccount);
@@ -333,16 +372,16 @@ ${inp.trendingLines || "（未取到）"}
   }
 
   if (weekly) {
-    // 周报写 10_Daily/weekly-W<ww>-<monday>.md
+    // 周报写 10_Daily/{company|personal}-W<ww>-<date>.md
     const now = new Date();
     const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
     const ww = String(Math.ceil((((monday - new Date(monday.getFullYear(), 0, 1)) / 86400e3) + 1) / 7)).padStart(2, "0");
-    const outName = `weekly-W${ww}-${monday.toISOString().slice(0, 10)}.md`;
+    const outName = `${weeklyKind}-W${ww}-${monday.toISOString().slice(0, 10)}.md`;
     const outPath = join(VAULT, "10_Daily", outName);
-    const alert = outwardAlertLine(inp.outwardAccount);
-    writeFileSync(outPath, `---\ntype: weekly-synthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${alert ? alert + "\n\n" : ""}${body}\n`);
-    commit(join(VAULT, "10_Daily", outName), `chore: weekly synthesis ${inp.dateStr}`);
-    console.log(`weekly written: ${outName}`);
+    const alert = weeklyCompany ? outwardAlertLine(inp.outwardAccount) : "";
+    writeFileSync(outPath, `---\ntype: ${weeklyKind}-weekly\nsynthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${alert ? alert + "\n\n" : ""}${body}\n`);
+    commit(join(VAULT, "10_Daily", outName), `chore: ${weeklyKind} weekly ${inp.dateStr}`);
+    console.log(`weekly written: ${outName} (${weeklyKind})`);
   } else {
     const outName = `brief-${inp.dateStr}.md`;
     const outPath = join(smoke ? outDirArg : join(VAULT, "00_Inbox"), outName);
