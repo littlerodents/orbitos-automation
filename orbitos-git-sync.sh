@@ -1,6 +1,18 @@
 #!/bin/zsh
 set -eu
 
+SCRIPT_DIR="${0:A:h}"
+source "$SCRIPT_DIR/lib/net-check.sh"
+
+# 2026-10-30：无论脚本从哪条路退出（含 fetch/rebase 失败），都执行本地兜底。
+# 之前兜底挂在文件末尾，任何 exit 1 都会跳过后面的 ensure-jobs —— 断网=日报永久缺失。
+run_fallback() {
+  if [ -x "$SCRIPT_DIR/ensure-jobs.sh" ]; then
+    "$SCRIPT_DIR/ensure-jobs.sh" >/dev/null 2>&1 || true
+  fi
+}
+trap run_fallback EXIT
+
 VAULT="/Users/evander/Obsidian/OrbitOS"
 LOG="/Users/evander/codex/orbitos-automation/orbitos-git-sync.log"
 
@@ -23,8 +35,14 @@ if ! git -C "$VAULT" rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" >
 fi
 
 if ! git -C "$VAULT" fetch --prune origin main >> "$LOG" 2>&1; then
-  log "error: fetch failed"
-  exit 1
+  # 2026-10-30 修复：原来这里 exit 1，导致尾部的 ensure-jobs（本地兜底）永远不执行，
+  # 断网 = 日报永久缺失且无人知道。现在：记一次失败 + 标记 pending，继续往下走。
+  log "warn: fetch failed (network?), continuing to local fallback"
+  net_mark_pending "git-sync"
+  if ! net_ok 8; then
+    log "skip: no network"
+    # 仍要执行兜底逻辑（本地检查），所以不 exit
+  fi
 fi
 
 DIVERGENCE="$(git -C "$VAULT" rev-list --left-right --count "HEAD...@{upstream}")"
@@ -44,6 +62,7 @@ fi
 
 if [ "$BEHIND" = "0" ]; then
   log "ok: up to date; ahead=$AHEAD behind=$BEHIND"
+  net_clear_pending "git-sync"
   exit 0
 fi
 
@@ -62,8 +81,4 @@ fi
 if [ -n "$(git -C "$VAULT" stash list 2>/dev/null)" ]; then
   log "WARNING: stash 非空（可能是 autostash 未恢复）：$(git -C "$VAULT" stash list | head -1)——请人工检查 git stash pop"
 fi
-
-# 自动化守护：关键任务掉线/被删时自愈（2026-09-21 误删事件后加，5 分钟内恢复）
-if [ -x "/Users/evander/Labs/codex/orbitos-automation/ensure-jobs.sh" ]; then
-  /Users/evander/Labs/codex/orbitos-automation/ensure-jobs.sh
-fi
+# 兜底由上面的 trap run_fallback EXIT 统一执行
