@@ -11,9 +11,8 @@
 	<string>com.evander.orbitos-weekly-personal</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/opt/homebrew/opt/node@22/bin/node</string>
-		<string>/Users/evander/Labs/codex/orbitos-automation/orbitos-daily-brief.mjs</string>
-		<string>--weekly-personal</string>
+		<string>/bin/zsh</string>
+		<string>/Users/evander/Labs/codex/orbitos-automation/weekly-personal.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>
