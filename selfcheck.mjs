@@ -467,6 +467,78 @@ check("I4-weekly-split", "周报必须拆成 company/personal 两套参数", () 
 });
 
 // =====================================================================
+// J. wikilink 质量（2026-10-31 P0-2）
+// =====================================================================
+function vaultLinkIndex() {
+  const idx = new Set();
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith(".md")) continue;
+      idx.add(e.name.slice(0, -3));
+      idx.add(p.slice(VAULT.length + 1, -3));
+      idx.add(p.slice(VAULT.length + 1, -3).split("/").pop());
+    }
+  };
+  walk(VAULT);
+  return idx;
+}
+
+function brokenLinksIn(text, idx) {
+  let n = 0;
+  for (const m of String(text).matchAll(/\[\[([^\]]+)\]\]/g)) {
+    const bare = m[1].split("|")[0].split("#")[0].trim();
+    if (bare && !idx.has(bare)) n += 1;
+  }
+  return n;
+}
+
+// J1: 最近 7 天的自动化产物不得有死链（历史死链不判失败，只报告）
+check("J1-new-content-no-broken-links", "P0-2 上线后生成的日报/周报不得含死链", () => {
+  const idx = vaultLinkIndex();
+  const dirs = [join(VAULT, "00_Inbox"), join(VAULT, "10_Daily")];
+  // 只检查 2026-10-31（P0-2 生成侧校验上线）之后写出的产物；更早的是历史存量
+  const cutoff = Date.parse("2026-10-31T00:00:00+08:00");
+  let total = 0;
+  const offenders = [];
+  for (const dir of dirs) {
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith(".md")); } catch { continue; }
+    for (const f of files) {
+      const p = join(dir, f);
+      try { if (statSync(p).mtimeMs < cutoff) continue; } catch { continue; }
+      if (!/^(brief-|company-|personal-|weekly-)/.test(f)) continue;
+      const n = brokenLinksIn(readFileSync(p, "utf8"), idx);
+      if (n) { total += n; offenders.push(`${f}(${n})`); }
+    }
+  }
+  return { pass: total === 0, detail: total ? `死链: ${offenders.join(", ")}` : "上线后产物 0 死链" };
+});
+
+// J2: 全 vault 死链存量（只报告，不判失败——历史存量需要人工决定是否清理）
+check("J2-vault-broken-links-report", "全 vault 死链存量（信息项）", () => {
+  const idx = vaultLinkIndex();
+  let total = 0;
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith(".md")) continue;
+      try { total += brokenLinksIn(readFileSync(p, "utf8"), idx); } catch {}
+    }
+  };
+  walk(VAULT);
+  return skip(`存量 ${total} 处（历史遗留，生成侧已不再新增）`);
+});
+
+// =====================================================================
 // 汇总
 // =====================================================================
 const passed = results.filter((r) => r.status === "PASS").length;

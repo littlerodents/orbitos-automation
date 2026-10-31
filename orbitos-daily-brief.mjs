@@ -111,6 +111,45 @@ function filesNewerThan(dir, days, filter = () => true) {
     .sort((a, b) => b.mtime - a.mtime);
 }
 
+// 2026-10-31（P0-2）：vault 内 wikilink 校验。
+// 背景：LLM 会生成 [[opc-launch]]（49 次）、[[AI]]（14 次）这类指向不存在笔记的链接，
+//       全 vault 225 处死链。方案 A：生成时校验，不存在就降级成纯文本（不建空壳）。
+export function buildVaultIndex(vault = VAULT) {
+  const idx = new Set();
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!e.name.endsWith(".md")) continue;
+      idx.add(e.name.slice(0, -3));                                  // 文件名（Obsidian 默认解析方式）
+      const rel = p.slice(vault.length + 1, -3);                     // 相对路径
+      idx.add(rel);
+      idx.add(rel.split("/").pop());
+    }
+  };
+  walk(vault);
+  return idx;
+}
+
+// [[target|alias]] / [[target#heading]] → 目标不存在时返回别名或纯文本
+export function sanitizeWikilinks(text, index) {
+  let dropped = 0;
+  const out = String(text).replace(/\[\[([^\]]+)\]\]/g, (m, inner) => {
+    const parts = String(inner).split("|");
+    const targetRaw = parts[0].trim();
+    const alias = parts[1] ? parts[1].trim() : "";
+    const bare = targetRaw.split("#")[0].trim();
+    if (!bare) return m;
+    if (index.has(bare)) return m;
+    dropped += 1;
+    return alias || bare;
+  });
+  return { text: out, dropped };
+}
+
 // 2026-10-31：记录每天推荐的行动，用于识别"连续 N 天推同一件卡住的事"。
 // 背景：10-20~10-25 六天 TL;DR 全是「发布 safety-eval 文章」，该动作卡了 31 天。
 const REC_STATE = join(homedir(), ".config/orbitos-automation/brief-recommendations.json");
@@ -413,11 +452,17 @@ ${inp.trendingLines || "（未取到）"}
   const expectedStart = weeklyCompany ? "## 本周结论" : weeklyPersonal ? "## 一句话" : "## TL;DR";
   if (!body.startsWith(expectedStart)) { console.error(`LLM 输出格式异常（期望 ${expectedStart}），放弃:\n`, body.slice(0, 300)); process.exit(1); }
 
+  // P0-2：写入前校验 wikilink，指向不存在笔记的降级为纯文本
+  const vaultIndex = buildVaultIndex();
+  const cleaned = sanitizeWikilinks(body, vaultIndex);
+  if (cleaned.dropped > 0) console.log(`[wikilink] 降级 ${cleaned.dropped} 个不存在的链接为纯文本`);
+  const bodySafe = cleaned.text;
+
   const tldr = weeklyCompany
-    ? (body.match(/## 本周结论\n(.+)/)?.[1]?.trim() || "")
+    ? (bodySafe.match(/## 本周结论\n(.+)/)?.[1]?.trim() || "")
     : weeklyPersonal
-      ? (body.match(/## 一句话\n(.+)/)?.[1]?.trim() || "")
-      : (body.match(/## TL;DR\n(.+)/)?.[1]?.trim() || "");
+      ? (bodySafe.match(/## 一句话\n(.+)/)?.[1]?.trim() || "")
+      : (bodySafe.match(/## TL;DR\n(.+)/)?.[1]?.trim() || "");
 
   if (dryRun) {
     console.log(`[dry-run] 将写入 ${weekly ? "10_Daily" : "00_Inbox"}；不落盘、不 commit、不调 tracker`);
@@ -445,13 +490,13 @@ ${inp.trendingLines || "（未取到）"}
     const outName = `${weeklyKind}-W${ww}-${monday.toISOString().slice(0, 10)}.md`;
     const outPath = join(VAULT, "10_Daily", outName);
     const alert = weeklyCompany ? outwardAlertLine(inp.outwardAccount) : "";
-    writeFileSync(outPath, `---\ntype: ${weeklyKind}-weekly\nsynthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${alert ? alert + "\n\n" : ""}${body}\n`);
+    writeFileSync(outPath, `---\ntype: ${weeklyKind}-weekly\nsynthesis\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Weekly — ${outName.replace(/\.md$/, "")}\n\n${alert ? alert + "\n\n" : ""}${bodySafe}\n`);
     commit(join(VAULT, "10_Daily", outName), `chore: ${weeklyKind} weekly ${inp.dateStr}`);
     console.log(`weekly written: ${outName} (${weeklyKind})`);
   } else {
     const outName = `brief-${inp.dateStr}.md`;
     const outPath = join(smoke ? outDirArg : join(VAULT, "00_Inbox"), outName);
-    writeFileSync(outPath, `---\ntype: daily-brief\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Brief — ${inp.dateStr}\n\n${body}\n\n---\n📊 [每日追踪表（打卡/勾行动）](${TRACKER_URL})\n`);
+    writeFileSync(outPath, `---\ntype: daily-brief\ndate: ${inp.dateStr}\nstatus: unread\nmodel: ${cfg.deepseek_model}\nsource: local-daily-brief\n---\n# Brief — ${inp.dateStr}\n\n${bodySafe}\n\n---\n📊 [每日追踪表（打卡/勾行动）](${TRACKER_URL})\n`);
     if (!smoke) commit(join(VAULT, "00_Inbox", outName), `chore: daily brief ${inp.dateStr}`);
     console.log(`brief written: ${outPath}`);
 
