@@ -539,6 +539,28 @@ check("J2-vault-broken-links-report", "全 vault 死链存量（信息项）", (
 });
 
 // =====================================================================
+// K. Wiki 沉淀（2026-10-31 P0-3 方案 B）
+// =====================================================================
+check("K1-wiki-drafts-pending", "Wiki 待审草稿不得超过 5 条（超了说明没人改）", () => {
+  const dir = join(VAULT, "40_Wiki");
+  if (!existsSync(dir)) return { pass: false, detail: "40_Wiki 不存在" };
+  const drafts = readdirSync(dir).filter((f) => f.endsWith(".md")).filter((f) => {
+    try { return /^status:\s*draft/m.test(readFileSync(join(dir, f), "utf8")); } catch { return false; }
+  });
+  return { pass: drafts.length <= 5, detail: `${drafts.length} 条待审${drafts.length ? ": " + drafts.slice(0, 4).join(", ") : ""}` };
+});
+
+check("K2-wiki-fresh", "近 14 天必须有新的 Wiki 条目（证明沉淀管线在跑）", () => {
+  const dir = join(VAULT, "40_Wiki");
+  if (!existsSync(dir)) return { pass: false, detail: "40_Wiki 不存在" };
+  const cutoff = Date.now() - 14 * 86400e3;
+  const recent = readdirSync(dir).filter((f) => f.endsWith(".md")).filter((f) => {
+    try { return statSync(join(dir, f)).mtimeMs >= cutoff; } catch { return false; }
+  });
+  return { pass: recent.length > 0, detail: recent.length ? `近 14 天 ${recent.length} 条` : "无新增（管线可能没跑）" };
+});
+
+// =====================================================================
 // 汇总
 // =====================================================================
 const passed = results.filter((r) => r.status === "PASS").length;
