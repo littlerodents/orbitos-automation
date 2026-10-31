@@ -70,6 +70,8 @@ const outDirArg = (() => {
   return i >= 0 ? process.argv[i + 1] : null;
 })();
 const smoke = Boolean(outDirArg);
+// 测试钩子：跳过对外闸门，仅用于验证日报内容
+const skipGate = process.env.BRIEF_SKIP_GATE === "1";
 
 async function withRetry(fn, attempts = 3, baseMs = 1000) {
   let lastErr;
@@ -109,6 +111,40 @@ function filesNewerThan(dir, days, filter = () => true) {
     .sort((a, b) => b.mtime - a.mtime);
 }
 
+// 2026-10-31：记录每天推荐的行动，用于识别"连续 N 天推同一件卡住的事"。
+// 背景：10-20~10-25 六天 TL;DR 全是「发布 safety-eval 文章」，该动作卡了 31 天。
+const REC_STATE = join(homedir(), ".config/orbitos-automation/brief-recommendations.json");
+
+export function loadRecommendations() {
+  try { return JSON.parse(readFileSync(REC_STATE, "utf8")); } catch { return {}; }
+}
+function saveRecommendations(state) {
+  try {
+    const days = Object.keys(state).sort().slice(-14); // 只留 14 天
+    const trimmed = Object.fromEntries(days.map(d => [d, state[d]]));
+    writeFileSync(REC_STATE, JSON.stringify(trimmed, null, 1));
+  } catch { /* 非致命 */ }
+}
+// 某行动在最近 N 天里被推荐了几次（用行动文本前 24 字做指纹）
+// 注意：日期必须按 Asia/Shanghai 格式化；用 toISOString() 会因 UTC 偏移差一天
+export function shiftDayStr(dateStr, delta) {
+  const d = new Date(`${dateStr}T00:00:00+08:00`);
+  d.setDate(d.getDate() + delta);
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai" }).format(d);
+}
+
+export function streakDays(state, text, todayStr, lookback = 4) {
+  const fp = String(text).replace(/\s+/g, "").slice(0, 24);
+  let n = 0;
+  for (let i = 1; i <= lookback; i += 1) {
+    const key = shiftDayStr(todayStr, -i);
+    const list = state[key] || [];
+    if (list.some(t => String(t).replace(/\s+/g, "").slice(0, 24) === fp)) n += 1;
+    else break;
+  }
+  return n;
+}
+
 async function gatherInputs() {
   const today = new Date();
   const dateStr = today.toISOString().slice(0, 10);
@@ -128,9 +164,25 @@ async function gatherInputs() {
     .sort((a, b) => b.age - a.age);
   const learningActions = allActions.filter(a => a.text.startsWith("[学习·"));
   const doneN = allActions.filter(a => a.status === "已完成").length;
-  const actionLines = actions.slice(0, 6)
-    .map(a => `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天] ${a.text}\n  依据: ${(a.rationale || "（未记录——在飞书表'为什么这么做'列补上）").replace(/\n/g, " ⏎ ")}`)
+  const recState = loadRecommendations();
+  const repeatInfo = new Map(); // text -> 连续推荐天数（不含今天）
+  for (const a of actions) repeatInfo.set(a.text, streakDays(recState, a.text, dateStr));
+
+  // 连续 ≥3 天的行动：不再重复推荐，改为「换策略」候选
+  const repeated = actions.filter(a => (repeatInfo.get(a.text) || 0) >= 3);
+  const freshActions = actions.filter(a => (repeatInfo.get(a.text) || 0) < 3);
+
+  const actionLines = (freshActions.length ? freshActions : actions).slice(0, 6)
+    .map(a => {
+      const st = repeatInfo.get(a.text) || 0;
+      const tag = st > 0 ? `·已连续推荐${st}天` : "";
+      return `- [${a.start ? a.start.slice(5).replace("-", "/") + " 卡起" : "新入"}·${a.age}天${tag}] ${a.text}\n  依据: ${(a.rationale || "（未记录——在飞书表'为什么这么做'列补上）").replace(/\n/g, " ⏎ ")}`;
+    })
     .join("\n");
+
+  const repeatedLines = repeated.length
+    ? repeated.slice(0, 3).map(a => `- [卡${a.age}天·连续推荐${repeatInfo.get(a.text)}天] ${a.text}`).join("\n")
+    : "";
   const learningLines = learningActions
     .map(a => `- ${a.text}`)
     .join("\n");
@@ -170,7 +222,13 @@ async function gatherInputs() {
     pendingBookmarks = readdirSync(matsDir).filter(f => f.endsWith(".md") && !readHead(join(matsDir, f), 400).includes("processed:")).length;
   }
 
-  return { dateStr, bookmarkNotes, selectedNotes, actionLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "", outwardAccount, allActions };
+  if (!dryRun) {
+    const todayPick = (freshActions.length ? freshActions : actions).slice(0, 6).map(a => a.text);
+    recState[dateStr] = todayPick;
+    saveRecommendations(recState);
+  }
+
+  return { dateStr, bookmarkNotes, selectedNotes, actionLines, repeatedLines, learningLines, doneN, projects, pendingBookmarks, trendingLines: "", outwardAccount, allActions };
 }
 
 // 6. GitHub Trending（开发者工具风向）——单独异步取，失败不拖垮日报
@@ -252,11 +310,17 @@ OrbitOS 是极简系统：飞书是提醒面，Obsidian 存精选。他在意的
 ## TL;DR
 一句话，≤30 个汉字，**今天 5 分钟内能启动的具体动作**（打开什么网站/文件、写下什么、发布什么），禁止抽象口号（如"完成发布""持续推进"这类空话必须换成具体第一步）。
 ## 行动提醒
-从行动表里挑 2-3 项最该动的（卡得越久越优先）。每项按四段写：
+从行动表里挑 2-3 项最该动的（卡得越久越优先）。**但若某项标注了「已连续推荐N天」，禁止再用同样的方式催它。**
+每项按四段写：
 1. **第一步**：打开哪个网址/文件、做什么、几分钟（行动文本里已带，复述强化）。
 2. **为什么**：背景一句话（依据栏有现成答案）。
 3. **最优吗**：如果有更优路径或已对比过的替代方案，直说；没有就不编。
 4. **时间账**：花几分钟 vs 已经卡了多少天；若沉没成本已超收益（价值衰减、窗口过期），直接建议把状态改「已放弃」——放弃也是完成决策，不要为了催而催。
+## 换策略（当某项连续推荐 ≥3 天时必写）
+如果「连续推荐项」区非空，说明同一件事已被催了多天还不动。**禁止第三次重复同样的建议**，改成一个三段式：
+1. **为什么没动**：三选一（怕被拒绝 / 不知道第一句话说什么 / 觉得做了也没用），不确定就写「需要你自己判断」。
+2. **降级动作**：把原动作砍到 3 分钟以内（例如：不是"发文章"，而是"只写标题"；不是"私聊 1 个用户"，而是"把要说的话打出来但不发"）。
+3. **放弃选项**：如果已经连续 ≥7 天，直接写「建议把这条改成『已放弃』，从推荐池移除」——不再出现在明天的日报里。
 ## 学习增量
 ${weekly ? "本周" : "今日"}三线学习清单（直接照着读，每条带原文链接和分钟数）——从用户消息的「${weekly ? "本周" : "今日"}学习行动」区原样列出；该区为空则写「（今日学习行动未生成——见行动追踪表）」。
 另外可补充书签整理/研究笔记里最值得精读的 ≤2 条：标题 + 一句话理由 + wikilink。没有就说没有，不要编。
@@ -286,7 +350,7 @@ async function main() {
   const inp = await attachTrending(await gatherInputs());
 
   // 硬闸门：只对日报生效；周报不受影响
-  if (!weekly) {
+  if (!weekly && !skipGate) {
     const gateState = loadGateState();
     const gate = decideGate(inp.allActions, inp.dateStr, gateState.excused);
     console.log(`outward gate: ${gate.gate} (${gate.reason}, streak=${gate.streak})`);
@@ -303,6 +367,7 @@ async function main() {
       return;
     }
   }
+  if (dryRun) console.log(`[dry-run] 连续推荐项: ${inp.repeatedLines ? inp.repeatedLines.split("\n").length + " 条" : "（无）"}`);
   if (dryRun) console.log(`[dry-run] trending lines: ${inp.trendingLines ? inp.trendingLines.split("\n").length + " 行" : "（空）"}`);
 
   if (!inp.bookmarkNotes.length && !inp.selectedNotes.length && weekly === false) {
@@ -314,8 +379,9 @@ async function main() {
 未处理书签积压: ${inp.pendingBookmarks} 条
 行动完成度: ${inp.doneN} 项已完成
 
-### 行动表（按卡龄降序，前 6）
+### 行动表（按卡龄降序，前 6；已剔除连续推荐 ≥3 天的）
 ${inp.actionLines || "（空）"}
+${inp.repeatedLines ? `\n### 连续推荐项（已被催 ≥3 天，必须换策略，禁止重复原建议）\n${inp.repeatedLines}` : ""}
 
 ### 今日学习行动（三线：Agent / PG / 独立开发）
 ${inp.learningLines || "（未生成）"}

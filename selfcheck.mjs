@@ -397,10 +397,14 @@ check("G2-alert-volume", "节流上线后，每天 alert 提交数必须 ≤ 2",
   const sinceMs = Date.parse(SINCE);
   const hours = (Date.now() - sinceMs) / 3600e3;
   if (hours < 24) return skip(`观察期：距上线 ${hours.toFixed(1)}h（需满 24h 才有意义）`);
-  const r = sh("git", ["-C", VAULT, "log", `--since=${SINCE}`, "--format=%ad", "--date=format:%Y-%m-%d"]);
-  const days = (r.stdout || "").split("\n").filter(Boolean);
+  // 只统计 alert: 开头的提交；此前误统计了全部提交（把 vault 备份也算进去）
+  const r = sh("git", ["-C", VAULT, "log", `--since=${SINCE}`, "--format=%ad|%s", "--date=format:%Y-%m-%d"]);
+  const days = (r.stdout || "").split("\n").filter((l) => l.includes("|alert:"));
   const perDay = {};
-  for (const d of days) perDay[d] = (perDay[d] || 0) + 1;
+  for (const line of days) {
+    const d = line.split("|")[0];
+    perDay[d] = (perDay[d] || 0) + 1;
+  }
   const worst = Math.max(0, ...Object.values(perDay));
   return { pass: worst <= 2, detail: `上线后每天 ${JSON.stringify(perDay)}（上限 2）` };
 });
