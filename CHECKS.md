@@ -32,6 +32,8 @@ tail -20 ~/.config/orbitos-automation/selfcheck.jsonl
 | **A7** no-invented-metric | 不得让 LLM 编指标 | 检查 brief 里比例是算出来的、无"本周完成数"、拒绝次数明确留空 | 3/3 | 报告里出现无法追溯的数字 |
 | **A8** catchup-lock-clean | 日报兜底锁不得残留 | 检查 `/tmp/orbitos-brief-catchup.lock` 是否存在且 >30 分钟 | 无锁或锁新鲜 | **兜底永久失效**。2026-10-23 就因此整天没日报，没人发现 |
 | **A9** brief-daily-present | 近 7 天日报不得缺失 | 逐日检查 `00_Inbox/brief-YYYY-MM-DD.md`，与 `tests/known-brief-gaps.txt` 比对 | 无**新增**缺失 | 某天静默漏发。历史缺口 10-23 已登记 baseline |
+| **A12** launchd-silent-failure | 所有 `com.evander.*` job 最近退出码 | 读 `launchctl list` 的 Status 列，与 `KNOWN_FAILING_JOBS`（须写原因）比对 | 全部 exit 0 | **job 死了没人知道**。2026-11-03 发现 stepfun-probe 连续 44 天 exit 1（ENOENT），日志 2.1MB 全是栈，没人看 |
+| **A13** fixture-not-in-tmp | 探针输入素材不得在 `/tmp` | 扫 6 个探针脚本是否含 `/tmp/firefly-test`，并检查共享 fixture 是否存在 | 0 处硬编码 + fixture 在 | 素材被 `disk-hygiene` 的 `L1_NAMES`（含 `tmp`）清掉 → 探针每 15 分钟 ENOENT |
 
 ## B. 生命周期（归档 + 记录层归档）
 

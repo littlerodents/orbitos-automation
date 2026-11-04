@@ -23,6 +23,7 @@ JOBS=(
   com.evander.orbitos-weekly-personal
   com.evander.orbitos-evening-reminder
   com.evander.disk-hygiene
+  com.evander.selfcheck
 )
 
 mkdir -p "$GUARD_STATE"

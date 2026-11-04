@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.evander.selfcheck</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/evander/Labs/codex/orbitos-automation/run-with-alert.sh</string>
+    <string>selfcheck</string>
+    <string>/Users/evander/Labs/codex/orbitos-automation/selfcheck.launchd.log</string>
+    <string>/opt/homebrew/opt/node@22/bin/node</string>
+    <string>/Users/evander/Labs/codex/orbitos-automation/selfcheck.mjs</string>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/Users/evander/.npm-global/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/evander/Labs/codex/orbitos-automation/selfcheck.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/evander/Labs/codex/orbitos-automation/selfcheck.launchd.err.log</string>
+</dict>
+</plist>

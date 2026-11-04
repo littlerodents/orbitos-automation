@@ -242,6 +242,58 @@ check("A11-no-stale-smoketest", "临时冒烟任务必须已清理", () => {
   };
 });
 
+// A12: launchd job 不得静默失败（2026-11-03 事故：stepfun-probe 连续 44 天 exit 1，无人发现）
+//   退出码是 launchd 已经替我们算好的信号，不去看等于白装监控。
+const KNOWN_FAILING_JOBS = {
+  // "com.evander.xxx": "写清原因（不写原因 = 就是静默失败）",
+};
+check("A12-launchd-silent-failure", "所有 com.evander.* job 最近一次退出码必须是 0", () => {
+  const r = sh("launchctl", ["list"]);
+  if (r.status !== 0) return { pass: false, detail: "launchctl list 跑不动" };
+  // 排除 selfcheck 自己：否则形成自指循环（本检测 FAIL → 本 job exit 1 → 本检测 FAIL）。
+  // 它自己的失败由 run-with-alert.sh 负责（连续 2 次 → vault ALERT + 飞书 DM）。
+  const SELF = "com.evander.selfcheck";
+  const bad = [];
+  const seen = [];
+  for (const line of (r.stdout || "").split("\n")) {
+    const m = line.match(/^(?:-|\d+)\t(-?\d+)\t(\S+)$/);
+    if (!m) continue;
+    const [, code, label] = m;
+    if (!label.startsWith("com.evander.")) continue;
+    seen.push(label);
+    if (label === SELF) continue;
+    if (Number(code) === 0) continue;
+    if (KNOWN_FAILING_JOBS[label]) continue;
+    bad.push(`${label} exit=${code}`);
+  }
+  if (!seen.length) return { pass: false, detail: "一个 com.evander.* 都没加载，job 全掉了" };
+  return {
+    pass: bad.length === 0,
+    detail: bad.length ? `非零退出: ${bad.join("；")}` : `${seen.length - 1} 个 job 全部 exit 0（selfcheck 自身不计，见注释）`,
+  };
+});
+
+// A13: 探针/测试的输入素材不得硬编码在 /tmp（disk-hygiene 的 L1_NAMES 含 "tmp"，会连带删掉）
+check("A13-fixture-not-in-tmp", "探针输入素材必须在持久目录，且不得硬编码 /tmp", () => {
+  const base = join(homedir(), "Labs/codex/deliverables/family-emotion-reminder/hackathon");
+  const files = [];
+  for (const d of ["voice-demo/scripts", "voice-repair-gzUTbP/scripts"]) {
+    for (const f of ["upstream-monitor.mjs", "delta-probe.mjs", "delta-spike.mjs", "rule-sweep.py", "rule-sweep2.py", "trend-detect.py"]) {
+      files.push(join(base, d, f));
+    }
+  }
+  const hits = files.filter((p) => existsSync(p) && readFileSync(p, "utf8").includes("/tmp/firefly-test"));
+  const fixture = join(homedir(), "Labs/codex/.family-voice-runtime/fixtures/long.wav");
+  const fixtureOk = existsSync(fixture);
+  return {
+    pass: hits.length === 0 && fixtureOk,
+    detail: [
+      hits.length ? `仍硬编码 /tmp: ${hits.map((p) => p.replace(base + "/", "")).join(", ")}` : "6 个探针脚本已无 /tmp/firefly-test",
+      fixtureOk ? "fixtures/long.wav 存在" : `fixtures/long.wav 缺失 ← 探针会立刻 ENOENT`,
+    ].join("｜"),
+  };
+});
+
 // =====================================================================
 // B. 生命周期（归档 + reconcile）
 // =====================================================================
@@ -310,7 +362,9 @@ check("C3-trending-nonfatal", "trending 失败不得让日报失败（代码层�
 // =====================================================================
 check("D1-outward-account-live", "追踪表对外/学习占比必须与实时表一致", () => {
   const rows = larkRows((JSON.parse(readFileSync(join(CFG, "tracker.config.json"), "utf8"))).action_table);
-  if (!rows) return { pass: false, detail: "飞书不可读（无法验证）" };
+  // 飞书只读失败 = 观察不到，不是“数据不一致”——按本文件约定记 SKIP（伪装成 PASS 或误报 FAIL 都不行）。
+  // launchd 下无交互 keychain 时这里会读不到；真鉴权断了由日报 job + A12 暴露。
+  if (!rows) return skip("飞书不可读（无法验证；鉴权断了由日报 job 暴露）");
   const total = rows.length;
   const outward = rows.filter((r) => {
     const t = String(cell(r["行动"]));
@@ -356,7 +410,7 @@ check("F1-gate-three-states", "闸门三态（完成/未完成/无记录）必�
 
 check("F2-daily-outward-row", "追踪表今天必须有且只有 1 条对外动作（幂等）", () => {
   const rows = larkRows((JSON.parse(readFileSync(join(CFG, "tracker.config.json"), "utf8"))).action_table);
-  if (!rows) return { pass: false, detail: "飞书不可读（无法验证）" };
+  if (!rows) return skip("飞书不可读（无法验证）");
   const t = rows.filter((r) => String(cell(r["行动"])).startsWith("[对外·") && day(r["开始卡于"]) === today);
   return { pass: t.length === 1, detail: `今天 [对外·] 行数=${t.length}（应为 1）` };
 });
